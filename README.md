@@ -1,3 +1,4 @@
+[![CI](https://github.com/Gailanimesh/miniproject/actions/workflows/ci.yml/badge.svg)](https://github.com/Gailanimesh/miniproject/actions)
 Django Auth - Progress README
 
 This README documents the TODO events for building user authentication for the chat bot application.
