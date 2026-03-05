@@ -1,44 +1,158 @@
+# Django Chatbot & Timetable API
 [![CI](https://github.com/Gailanimesh/miniproject/actions/workflows/ci.yml/badge.svg)](https://github.com/Gailanimesh/miniproject/actions)
-Django Auth - Progress README
 
-This README documents the TODO events for building user authentication for the chat bot application.
+## Overview
 
-Summary of tasks:
+This project provides a backend for user authentication, timetable management, and a chatbot API. It uses Django REST Framework (DRF) and JWT authentication. The chatbot is ready for future RAG/ML integration.
 
-- Create todo plan and confirm requirements: COMPLETED
-  - Notes: Requirements clarified; waiting on choices for REST vs server-rendered, DB, and email settings.
+## Features
 
-- Scaffold Django project + virtualenv: IN-PROGRESS
-  - Next: Create a Python virtualenv, install Django and DRF, start project and initial app structure.
+- User Authentication: Register, login, logout, JWT token management.
+- Timetable Management: Create topics, add free slots, schedule entries, set reminders.
+- Chatbot API: Basic conversation flow, ready for RAG/ML extension.
+- Validation: Prevents duplicate topics and overlapping slots.
+- Comprehensive Testing: Unit and API tests for all major endpoints.
+- CI/CD: Automated testing via GitHub Actions.
 
-- Add `users` app and models: NOT STARTED
-  - Next: Create `users` app, custom `User` model if needed, serializers and admin registration.
+## Setup Instructions
 
-- Configure DRF and JWT authentication: NOT STARTED
-  - Next: Add `djangorestframework` and `djangorestframework-simplejwt` to settings and configure token lifetimes.
+1. Clone the repository
+	 ```
+	 git clone https://github.com/Gailanamesh/miniproject.git
+	 cd miniproject
+	 ```
 
-- Implement registration endpoint: NOT STARTED
-  - Next: Create an endpoint to register users with validation and email confirmation stub.
+2. Create and activate a virtual environment
+	 ```
+	 python -m venv venv
+	 source venv/bin/activate  # On Windows: venv\Scripts\activate
+	 ```
 
-- Implement login (token obtain/refresh) endpoints: NOT STARTED
-  - Next: Wire up JWT token obtain and refresh views and serializers.
+3. Install dependencies
+	 ```
+	 pip install -r requirements.txt
+	 ```
 
-- Implement logout/token blacklist: NOT STARTED
-  - Next: Add token blacklist support or short token lifetimes + refresh revocation strategy.
+4. Apply migrations
+	 ```
+	 python manage.py migrate
+	 ```
 
-- Password reset via email: NOT STARTED
-  - Next: Integrate Django's password reset views or DRF endpoints; configure email backend for dev.
+5. Run the development server
+	 ```
+	 python manage.py runserver
+	 ```
 
-- Unit tests for auth flows: NOT STARTED
-  - Next: Add tests for registration, login, refresh, logout, and reset flows.
+## API Endpoints
 
-- Documentation and README with run steps: NOT STARTED
-  - Next: Expand this README with setup commands after scaffolding is complete.
+- User Registration: `/api/users/register/`
+- Login: `/api/users/login/`
+- Logout: `/api/users/logout/`
+- Token Refresh: `/api/users/token/refresh/`
+- Timetable: `/api/timetable/`
+- Chatbot Conversation: `/api/chatbot/converse/`
 
-How to proceed now (recommended):
+## Testing
 
-1. Confirm whether you want a REST API (DRF + JWT) or server-rendered auth (Django sessions & templates).
-2. Confirm the database choice: `sqlite` (default/dev) or `postgres` (production-like).
-3. Confirm whether to set up email (SMTP) now or stub it for development.
+- Run all tests
+	```
+	python manage.py test
+	```
 
-Once you confirm, I'll finish scaffolding the project and update this README with concrete setup and run commands.
+- Test Coverage
+	- Authentication flows
+	- Timetable validation
+	- Chatbot API
+
+## CI/CD Workflow
+
+- Automated tests run on every push and pull request via GitHub Actions.
+- See `.github/workflows/ci.yml` for configuration.
+
+## Usage Examples
+
+- Register a user
+	```
+	POST /api/users/register/
+	{
+		"username": "testuser",
+		"password": "securepassword"
+	}
+	```
+
+- Add a timetable topic
+	```
+	POST /api/timetable/topics/
+	{
+		"name": "Math"
+	}
+	```
+
+- Chatbot conversation
+	```
+	POST /api/chatbot/converse/
+	{
+		"message": "What is my next free slot?"
+	}
+	```
+
+## Future Work
+
+- Integrate RAG/ML for chatbot responses.
+- Add reminders and notification system.
+- Enhance feedback and analytics.
+- IoT integration.
+Django Chatbot & Timetable API
+<img src="https://github.com/Gailanimesh/miniproject/actions/workflows/ci.yml/badge.svg" alt="CI">
+
+Overview
+This project provides a backend for user authentication, timetable management, and a chatbot API. It uses Django REST Framework (DRF) and JWT authentication. The chatbot is ready for future RAG/ML integration.
+
+Features
+User Authentication: Register, login, logout, JWT token management.
+Timetable Management: Create topics, add free slots, schedule entries, set reminders.
+Chatbot API: Basic conversation flow, ready for RAG/ML extension.
+Validation: Prevents duplicate topics and overlapping slots.
+Comprehensive Testing: Unit and API tests for all major endpoints.
+CI/CD: Automated testing via GitHub Actions.
+Setup Instructions
+Clone the repository
+
+Create and activate a virtual environment
+
+Install dependencies
+
+Apply migrations
+
+Run the development server
+
+API Endpoints
+User Registration: /api/users/register/
+Login: /api/users/login/
+Logout: /api/users/logout/
+Token Refresh: /api/users/token/refresh/
+Timetable: /api/timetable/
+Chatbot Conversation: /api/chatbot/converse/
+Testing
+Run all tests
+
+Test Coverage
+
+Authentication flows
+Timetable validation
+Chatbot API
+CI/CD Workflow
+Automated tests run on every push and pull request via GitHub Actions.
+See ci.yml for configuration.
+Usage Examples
+Register a user
+
+Add a timetable topic
+
+Chatbot conversation
+
+Future Work
+Integrate RAG/ML for chatbot responses.
+Add reminders and notification system.
+Enhance feedback and analytics.
+IoT integration.
