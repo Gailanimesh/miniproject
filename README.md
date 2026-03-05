@@ -86,17 +86,7 @@ This project provides a backend for user authentication, timetable management, a
 	{
 		"name": "Math"
 	}
-	```
-
-- Chatbot conversation
-	```
-	POST /api/chatbot/converse/
-	{
 		"message": "What is my next free slot?"
-	}
-	```
-
-## Future Work
 
 - Integrate RAG/ML for chatbot responses.
 - Add reminders and notification system.
@@ -107,11 +97,6 @@ Django Chatbot & Timetable API
 
 Overview
 This project provides a backend for user authentication, timetable management, and a chatbot API. It uses Django REST Framework (DRF) and JWT authentication. The chatbot is ready for future RAG/ML integration.
-
-Features
-User Authentication: Register, login, logout, JWT token management.
-Timetable Management: Create topics, add free slots, schedule entries, set reminders.
-Chatbot API: Basic conversation flow, ready for RAG/ML extension.
 Validation: Prevents duplicate topics and overlapping slots.
 Comprehensive Testing: Unit and API tests for all major endpoints.
 CI/CD: Automated testing via GitHub Actions.
@@ -131,24 +116,14 @@ User Registration: /api/users/register/
 Login: /api/users/login/
 Logout: /api/users/logout/
 Token Refresh: /api/users/token/refresh/
-Timetable: /api/timetable/
-Chatbot Conversation: /api/chatbot/converse/
-Testing
-Run all tests
 
 Test Coverage
-
-Authentication flows
 Timetable validation
 Chatbot API
 CI/CD Workflow
 Automated tests run on every push and pull request via GitHub Actions.
 See ci.yml for configuration.
 Usage Examples
-Register a user
-
-Add a timetable topic
-
 Chatbot conversation
 
 Future Work

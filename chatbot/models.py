@@ -10,3 +10,10 @@ class Message(models.Model):
     sender = models.CharField(max_length=10)  # 'user' or 'bot'
     text = models.TextField()
     timestamp = models.DateTimeField(auto_now_add=True)
+
+class Document(models.Model):
+    title = models.CharField(max_length=255)
+    content = models.TextField()
+    embedding = models.BinaryField(null=True)  # For future embedding storage
+    def __str__(self):
+        return self.title
