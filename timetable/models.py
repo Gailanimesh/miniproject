@@ -34,3 +34,26 @@ class Reminder(models.Model):
     entry = models.ForeignKey(TimetableEntry, on_delete=models.CASCADE, related_name='reminders')
     remind_at = models.DateTimeField()
     sent = models.BooleanField(default=False)
+
+
+class ExamSubject(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='exam_subjects'
+    )
+    name = models.CharField(max_length=100)
+    exam_date = models.DateField()
+    difficulty = models.CharField(max_length=50, default='medium')
+
+    class Meta:
+        ordering = ['exam_date', 'name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user', 'name', 'exam_date'],
+                name='uniq_exam_subject_per_day'
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.exam_date})"

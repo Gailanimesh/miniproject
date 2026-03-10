@@ -1,4 +1,5 @@
 from django.db import models
+from django.conf import settings
 from django.contrib.auth.base_user import BaseUserManager
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.utils import timezone
@@ -40,3 +41,23 @@ class User(AbstractBaseUser, PermissionsMixin):
 
 	def __str__(self):
 		return self.email
+
+
+class UserProfile(models.Model):
+	user = models.OneToOneField(
+		settings.AUTH_USER_MODEL,
+		on_delete=models.CASCADE,
+		related_name='profile'
+	)
+	goal_type = models.CharField(max_length=100, blank=True)
+	exam_date = models.DateField(null=True, blank=True)
+	knowledge_level = models.CharField(max_length=50, blank=True)
+	daily_free_hours = models.PositiveIntegerField(default=0)
+	occupation = models.CharField(max_length=100, blank=True)
+	preferred_study_time = models.CharField(max_length=50, blank=True)
+	learning_style = models.CharField(max_length=50, blank=True)
+	created_at = models.DateTimeField(auto_now_add=True)
+	updated_at = models.DateTimeField(auto_now=True)
+
+	def __str__(self):
+		return f"Profile<{self.user.email}>"

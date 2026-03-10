@@ -57,14 +57,15 @@ class FullApiFlowTests(APITestCase):
         self.assertTrue(isinstance(resp.data, list))
 
         # Chatbot converse
-        resp = self.client.post(self.chatbot_url, {"text": "hi"}, format='json')
+        resp = self.client.post(self.chatbot_url, {"message": "hi"}, format='json')
         self.assertEqual(resp.status_code, 200)
-        self.assertIn("bot_message", resp.data)
+        self.assertIn("response", resp.data)
 
         # Refresh token
         resp = self.client.post(self.refresh_url, {"refresh": refresh}, format='json')
         self.assertEqual(resp.status_code, 200)
         self.assertIn("access", resp.data)
+        refresh = resp.data.get("refresh", refresh)
 
         # Logout
         resp = self.client.post(self.logout_url, {"refresh": refresh}, format='json')

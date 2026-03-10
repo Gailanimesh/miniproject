@@ -3,7 +3,8 @@ from django.utils import timezone
 from django.apps import apps
 from .models import Topic, FreeSlot
 
-def schedule_timetable_for_user(user):
+
+def schedule_timetable_for_user(user, max_chunk_minutes=60):
     TimetableEntry = apps.get_model('timetable', 'TimetableEntry')
 
     """
@@ -28,7 +29,7 @@ def schedule_timetable_for_user(user):
             topic = next((t for t in topics if t.remaining > 0), None)
             if not topic:
                 break
-            take = min(available, topic.remaining, 60)
+            take = min(available, topic.remaining, max_chunk_minutes)
             chunk_start = slot_start
             chunk_end = chunk_start + timedelta(minutes=take)
             entries.append(TimetableEntry(user=user, topic_id=topic.id, start=chunk_start, end=chunk_end))

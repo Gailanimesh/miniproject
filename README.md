@@ -1,133 +1,204 @@
-# Django Chatbot & Timetable API
-[![CI](https://github.com/Gailanimesh/miniproject/actions/workflows/ci.yml/badge.svg)](https://github.com/Gailanimesh/miniproject/actions)
+# AI Timetable Planner Backend
 
-## Overview
+Django REST Framework backend for conversational timetable planning, onboarding, OCR-based exam parsing, and RAG-style study guidance.
 
-This project provides a backend for user authentication, timetable management, and a chatbot API. It uses Django REST Framework (DRF) and JWT authentication. The chatbot is ready for future RAG/ML integration.
+## Stack
+- Django 5 + DRF
+- SimpleJWT authentication
+- SQLite (default)
+- SentenceTransformers for embeddings
+- Groq chat completion API
+- OCR parsing pipeline (`pytesseract` + `Pillow`) with graceful fallback
 
-## Features
+## Setup
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python manage.py migrate
+python manage.py runserver
+```
 
-- User Authentication: Register, login, logout, JWT token management.
-- Timetable Management: Create topics, add free slots, schedule entries, set reminders.
-- Chatbot API: Basic conversation flow, ready for RAG/ML extension.
-- Validation: Prevents duplicate topics and overlapping slots.
-- Comprehensive Testing: Unit and API tests for all major endpoints.
-- CI/CD: Automated testing via GitHub Actions.
+## Core API Endpoints
 
-## Setup Instructions
+### Auth
+- `POST /api/auth/register/`
+- `POST /api/auth/token/`
+- `POST /api/auth/token/refresh/`
+- `POST /api/auth/logout/`
+- `POST /api/auth/password-reset/`
+- `POST /api/auth/password-reset/confirm/<uidb64>/<token>/`
+- `GET /api/auth/me/`
 
-1. Clone the repository
-	 ```
-	 git clone https://github.com/Gailanamesh/miniproject.git
-	 cd miniproject
-	 ```
+### Timetable
+- `POST /api/timetable/chatbot/`
+- `GET /api/timetable/entries/`
+- `PATCH /api/timetable/entries/<id>/`
 
-2. Create and activate a virtual environment
-	 ```
-	 python -m venv venv
-	 source venv/bin/activate  # On Windows: venv\Scripts\activate
-	 ```
+### Chatbot
+- `POST /api/chatbot/converse/`
+- `GET /api/chatbot/conversations/`
+- `GET /api/chatbot/conversations/<conversation_id>/messages/`
 
-3. Install dependencies
-	 ```
-	 pip install -r requirements.txt
-	 ```
+---
 
-4. Apply migrations
-	 ```
-	 python manage.py migrate
-	 ```
+## OpenAPI-Style Examples (Frontend Integration)
 
-5. Run the development server
-	 ```
-	 python manage.py runserver
-	 ```
+### `POST /api/chatbot/converse/`
+Purpose: Send a conversational message or invoke a tool (`onboarding`, `generate_timetable`, `ocr_exam_parser`, `rag_chat`, `adaptive_reschedule`).
 
-## API Endpoints
+Authentication: `Bearer <access_token>`
 
-- User Registration: `/api/users/register/`
-- Login: `/api/users/login/`
-- Logout: `/api/users/logout/`
-- Token Refresh: `/api/users/token/refresh/`
-- Timetable: `/api/timetable/`
-- Chatbot Conversation: `/api/chatbot/converse/`
+#### Example A: RAG chat
+Request:
+```http
+POST /api/chatbot/converse/
+Authorization: Bearer <access_token>
+Content-Type: application/json
+```
 
-## Testing
+```json
+{
+  "message": "How should I prepare for data structures in 2 weeks?"
+}
+```
 
-- Run all tests
-	```
-	python manage.py test
-	```
+Response 200:
+```json
+{
+  "response": "Start with arrays and linked lists, then trees, then graphs...",
+  "tool": "rag_chat",
+  "context_used": true,
+  "conversation_id": 14
+}
+```
 
-- Test Coverage
-	- Authentication flows
-	- Timetable validation
-	- Chatbot API
+#### Example B: Continue an existing conversation
+Request:
+```json
+{
+  "conversation_id": 14,
+  "message": "Can you make this a daily plan?"
+}
+```
 
-## CI/CD Workflow
+Response 200:
+```json
+{
+  "response": "Yes. Day 1 and 2 focus on fundamentals...",
+  "tool": "rag_chat",
+  "context_used": true,
+  "conversation_id": 14
+}
+```
 
-- Automated tests run on every push and pull request via GitHub Actions.
-- See `.github/workflows/ci.yml` for configuration.
+#### Example C: Adaptive rescheduling when a task is missed
+Request:
+```json
+{
+  "tool": "adaptive_reschedule",
+  "adaptive_reschedule": {
+    "entry_id": 52,
+    "reason": "I was busy and had no time yesterday"
+  }
+}
+```
 
-## Usage Examples
+Response 200:
+```json
+{
+  "response": "I have rescheduled your upcoming plan based on your feedback.",
+  "tool": "adaptive_reschedule",
+  "strategy": {
+    "action": "split_topic_into_smaller_sessions",
+    "max_chunk_minutes": 30,
+    "priority_boost": 1,
+    "extra_minutes_ratio": 0.0
+  },
+  "entries": [
+    {
+      "id": 88,
+      "topic": "Data Structures",
+      "start": "2026-03-11T10:00:00Z",
+      "end": "2026-03-11T10:30:00Z",
+      "done": false
+    }
+  ],
+  "target_entry_id": 52,
+  "extra_minutes_added": 0,
+  "conversation_id": 14
+}
+```
 
-- Register a user
-	```
-	POST /api/users/register/
-	{
-		"username": "testuser",
-		"password": "securepassword"
-	}
-	```
+---
 
-- Add a timetable topic
-	```
-	POST /api/timetable/topics/
-	{
-		"name": "Math"
-	}
-		"message": "What is my next free slot?"
+### `GET /api/chatbot/conversations/`
+Purpose: List conversation threads for the authenticated user.
 
-- Integrate RAG/ML for chatbot responses.
-- Add reminders and notification system.
-- Enhance feedback and analytics.
-- IoT integration.
-Django Chatbot & Timetable API
-<img src="https://github.com/Gailanimesh/miniproject/actions/workflows/ci.yml/badge.svg" alt="CI">
+Authentication: `Bearer <access_token>`
 
-Overview
-This project provides a backend for user authentication, timetable management, and a chatbot API. It uses Django REST Framework (DRF) and JWT authentication. The chatbot is ready for future RAG/ML integration.
-Validation: Prevents duplicate topics and overlapping slots.
-Comprehensive Testing: Unit and API tests for all major endpoints.
-CI/CD: Automated testing via GitHub Actions.
-Setup Instructions
-Clone the repository
+Request:
+```http
+GET /api/chatbot/conversations/
+Authorization: Bearer <access_token>
+```
 
-Create and activate a virtual environment
+Response 200:
+```json
+[
+  {
+    "id": 14,
+    "started_at": "2026-03-10T08:20:10.101Z",
+    "message_count": 12
+  },
+  {
+    "id": 11,
+    "started_at": "2026-03-08T13:01:00.310Z",
+    "message_count": 5
+  }
+]
+```
 
-Install dependencies
+---
 
-Apply migrations
+### `GET /api/chatbot/conversations/<conversation_id>/messages/`
+Purpose: Get ordered message history for a single conversation.
 
-Run the development server
+Authentication: `Bearer <access_token>`
 
-API Endpoints
-User Registration: /api/users/register/
-Login: /api/users/login/
-Logout: /api/users/logout/
-Token Refresh: /api/users/token/refresh/
+Request:
+```http
+GET /api/chatbot/conversations/14/messages/
+Authorization: Bearer <access_token>
+```
 
-Test Coverage
-Timetable validation
-Chatbot API
-CI/CD Workflow
-Automated tests run on every push and pull request via GitHub Actions.
-See ci.yml for configuration.
-Usage Examples
-Chatbot conversation
+Response 200:
+```json
+[
+  {
+    "id": 101,
+    "conversation": 14,
+    "sender": "user",
+    "text": "I missed yesterday's session",
+    "timestamp": "2026-03-10T08:22:11.000Z"
+  },
+  {
+    "id": 102,
+    "conversation": 14,
+    "sender": "bot",
+    "text": "No problem. I will reschedule in smaller sessions.",
+    "timestamp": "2026-03-10T08:22:11.500Z"
+  }
+]
+```
 
-Future Work
-Integrate RAG/ML for chatbot responses.
-Add reminders and notification system.
-Enhance feedback and analytics.
-IoT integration.
+---
+
+## Run Tests
+```bash
+python manage.py test
+```
+
+## Notes
+- For OCR in production, install system Tesseract in addition to Python packages.
+- If `GROQ_API_KEY` is not configured, chatbot responds with an explicit fallback message.
