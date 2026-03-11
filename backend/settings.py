@@ -14,20 +14,27 @@ import os
 from pathlib import Path
 
 
-def _csv_env(env_name):
-    raw = os.getenv(env_name, "")
+def _csv(raw):
     return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _csv_env(*env_names):
+    for env_name in env_names:
+        raw = os.getenv(env_name, "")
+        if raw.strip():
+            return _csv(raw)
+    return []
 
 # Use environment variables for secrets & debug
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'unsafe-dev-secret')
 DEBUG = os.getenv('DJANGO_DEBUG', 'True') == 'True'
-ALLOWED_HOSTS = _csv_env("DJANGO_ALLOWED_HOSTS")
+ALLOWED_HOSTS = _csv_env("DJANGO_ALLOWED_HOSTS", "ALLOWED_HOSTS")
 if not ALLOWED_HOSTS:
+    # Default to known local/dev and Railway hostnames when env vars are missing.
+    ALLOWED_HOSTS = ["prominder.up.railway.app", "127.0.0.1", "localhost"]
     railway_public_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
-    if railway_public_domain:
-        ALLOWED_HOSTS = [railway_public_domain]
-    elif DEBUG:
-        ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
+    if railway_public_domain and railway_public_domain not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(railway_public_domain)
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent

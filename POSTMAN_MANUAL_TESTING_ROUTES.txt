@@ -1,0 +1,569 @@
+AI TIMETABLE BACKEND - POSTMAN MANUAL TESTING GUIDE
+Date: 2026-03-11
+
+BASE URL
+- Local: http://127.0.0.1:8000
+
+POSTMAN ENVIRONMENT VARIABLES (recommended)
+- base_url = http://127.0.0.1:8000
+- access_token = (empty initially)
+- refresh_token = (empty initially)
+- entry_id = 1
+- conversation_id = 1
+- notification_id = 1
+- uid = (from password reset email log)
+- reset_token = (from password reset email log)
+
+COMMON HEADERS FOR POSTMAN
+
+1) Public JSON endpoints (no login needed)
+- Accept: application/json
+- Content-Type: application/json
+
+2) Protected JSON endpoints (login required)
+- Accept: application/json
+- Content-Type: application/json
+- Authorization: Bearer {{access_token}}
+
+3) Protected file upload endpoint (OCR image)
+- Accept: application/json
+- Authorization: Bearer {{access_token}}
+- In Postman Body use form-data, key exam_image (type File)
+- Do not manually force Content-Type for form-data
+
+ALL API ROUTES (METHOD + PATH)
+
+AUTH
+- POST /api/auth/register/
+- POST /api/auth/token/
+- POST /api/auth/token/refresh/
+- POST /api/auth/logout/
+- POST /api/auth/password-reset/
+- POST /api/auth/password-reset/confirm/<uidb64>/<token>/
+- GET  /api/auth/me/
+
+TIMETABLE
+- POST /api/timetable/chatbot/
+- GET  /api/timetable/entries/
+- GET  /api/timetable/entries/<pk>/
+- PATCH /api/timetable/entries/<pk>/
+- PUT /api/timetable/entries/<pk>/
+- POST /api/timetable/entries/<pk>/completion-response/
+- GET  /api/timetable/notifications/
+- PATCH /api/timetable/notifications/<pk>/read/
+
+CHATBOT
+- POST /api/chatbot/converse/
+- GET  /api/chatbot/conversations/
+- GET  /api/chatbot/conversations/<conversation_id>/messages/
+
+ADMIN
+- /admin/ (Django admin, usually browser/session auth, not JWT API style)
+
+============================================================
+MANUAL TESTING FLOW (recommended order)
+============================================================
+
+STEP 1: REGISTER USER
+Request
+- Method: POST
+- URL: {{base_url}}/api/auth/register/
+- Headers: Public JSON headers
+Body (raw JSON)
+{
+  "email": "manualtester@example.com",
+  "password": "Test12345",
+  "first_name": "Manual",
+  "last_name": "Tester"
+}
+Expected
+- Status: 201 Created (or 200 in some setups)
+- Response example:
+{
+  "id": 1,
+  "email": "manualtester@example.com",
+  "first_name": "Manual",
+  "last_name": "Tester"
+}
+
+STEP 2: LOGIN (GET TOKENS)
+Request
+- Method: POST
+- URL: {{base_url}}/api/auth/token/
+- Headers: Public JSON headers
+Body
+{
+  "email": "manualtester@example.com",
+  "password": "Test12345"
+}
+Expected
+- Status: 200 OK
+- Response example:
+{
+  "refresh": "<jwt_refresh_token>",
+  "access": "<jwt_access_token>"
+}
+Postman Tests tab (optional):
+const data = pm.response.json();
+pm.environment.set("access_token", data.access);
+pm.environment.set("refresh_token", data.refresh);
+
+STEP 3: GET MY PROFILE
+Request
+- Method: GET
+- URL: {{base_url}}/api/auth/me/
+- Headers: Protected JSON headers
+Expected
+- Status: 200 OK
+- Response example:
+{
+  "id": 1,
+  "email": "manualtester@example.com",
+  "first_name": "Manual",
+  "last_name": "Tester"
+}
+
+STEP 4: TOKEN REFRESH
+Request
+- Method: POST
+- URL: {{base_url}}/api/auth/token/refresh/
+- Headers: Public JSON headers
+Body
+{
+  "refresh": "{{refresh_token}}"
+}
+Expected
+- Status: 200 OK
+- Response has a new access token, and may also return refresh if rotation is enabled.
+Example:
+{
+  "access": "<new_access_token>",
+  "refresh": "<maybe_new_refresh_token>"
+}
+
+STEP 5: PASSWORD RESET REQUEST
+Request
+- Method: POST
+- URL: {{base_url}}/api/auth/password-reset/
+- Headers: Public JSON headers
+Body
+{
+  "email": "manualtester@example.com"
+}
+Expected
+- Status: 204 No Content
+- No response body
+Notes
+- This backend uses console email backend in development.
+- Check the terminal running Django for reset link containing uid and token.
+
+STEP 6: PASSWORD RESET CONFIRM
+Request
+- Method: POST
+- URL: {{base_url}}/api/auth/password-reset/confirm/{{uid}}/{{reset_token}}/
+- Headers: Public JSON headers
+Body
+{
+  "uid": "{{uid}}",
+  "token": "{{reset_token}}",
+  "new_password": "Newpass12345"
+}
+Expected
+- Status: 200 OK
+- Usually empty body
+Important
+- Current view validates uid/token from JSON body fields.
+
+STEP 7: SAVE TOPICS + FREE SLOTS AND GENERATE TIMETABLE
+Request
+- Method: POST
+- URL: {{base_url}}/api/timetable/chatbot/
+- Headers: Protected JSON headers
+Body
+{
+  "topics": [
+    {
+      "name": "Math",
+      "estimated_minutes": 120,
+      "priority": 2
+    },
+    {
+      "name": "Operating Systems",
+      "estimated_minutes": 90,
+      "priority": 3
+    }
+  ],
+  "free_slots": [
+    {
+      "start": "2026-03-15T10:00:00Z",
+      "end": "2026-03-15T12:00:00Z"
+    },
+    {
+      "start": "2026-03-16T09:00:00Z",
+      "end": "2026-03-16T10:30:00Z"
+    }
+  ]
+}
+Expected
+- Status: 200 OK
+- Response example (array):
+[
+  {
+    "id": 1,
+    "topic": {
+      "id": 1,
+      "name": "Math",
+      "estimated_minutes": 120,
+      "priority": 2,
+      "completed_minutes": 0
+    },
+    "start": "2026-03-15T10:00:00Z",
+    "end": "2026-03-15T11:00:00Z",
+    "notified": false,
+    "done": false
+  }
+]
+Validation notes
+- Duplicate topic name for same user can return 400.
+- Overlapping free slots can return 400.
+
+STEP 8: LIST TIMETABLE ENTRIES
+Request
+- Method: GET
+- URL: {{base_url}}/api/timetable/entries/
+- Headers: Protected JSON headers
+Expected
+- Status: 200 OK
+- Response: array of timetable entries
+
+STEP 9: GET ONE TIMETABLE ENTRY
+Request
+- Method: GET
+- URL: {{base_url}}/api/timetable/entries/{{entry_id}}/
+- Headers: Protected JSON headers
+Expected
+- Status: 200 OK
+
+STEP 10: UPDATE ONE TIMETABLE ENTRY (PATCH)
+Request
+- Method: PATCH
+- URL: {{base_url}}/api/timetable/entries/{{entry_id}}/
+- Headers: Protected JSON headers
+Body
+{
+  "done": true
+}
+Expected
+- Status: 200 OK
+- Response contains updated entry
+
+STEP 11: SEND COMPLETION RESPONSE FOR AN ENTRY
+Request
+- Method: POST
+- URL: {{base_url}}/api/timetable/entries/{{entry_id}}/completion-response/
+- Headers: Protected JSON headers
+Body (completed false example)
+{
+  "completed": false,
+  "response_text": "I was busy today",
+  "quiz_answer": "I revised only half of the topic"
+}
+Expected
+- Status: 200 OK
+- Response example (rescheduled path):
+{
+  "status": "rescheduled",
+  "entry_done": false,
+  "completion_check": {
+    "entry_id": 1,
+    "asked_at": "2026-03-15T12:10:00Z",
+    "response_received_at": "2026-03-15T12:20:00Z",
+    "completed": false,
+    "quiz_question": "Quick check question"
+  },
+  "strategy": {
+    "action": "split_topic_into_smaller_sessions",
+    "max_chunk_minutes": 30,
+    "priority_boost": 1,
+    "extra_minutes_ratio": 0.0
+  },
+  "generation": {
+    "algorithm": "score_weighted_exam_aware"
+  },
+  "entries": [
+    {
+      "id": 2,
+      "topic": "Math",
+      "topic_id": 1,
+      "start": "2026-03-16T09:00:00Z",
+      "end": "2026-03-16T09:30:00Z",
+      "done": false
+    }
+  ]
+}
+Body (completed true example)
+{
+  "completed": true,
+  "response_text": "Completed successfully"
+}
+Expected
+- Status: 200 OK
+- Response has status "completed" and entry_done true
+
+STEP 12: LIST NOTIFICATIONS
+Request
+- Method: GET
+- URL: {{base_url}}/api/timetable/notifications/
+- Headers: Protected JSON headers
+Expected
+- Status: 200 OK
+- Response example:
+[
+  {
+    "id": 1,
+    "entry_id": 1,
+    "notification_type": "completion_check",
+    "title": "Did you complete your study session?",
+    "message": "Please confirm your completion status.",
+    "payload": {},
+    "scheduled_for": "2026-03-15T12:05:00Z",
+    "sent_at": "2026-03-15T12:05:05Z",
+    "action_due_at": "2026-03-15T12:35:00Z",
+    "is_read": false,
+    "is_actioned": false,
+    "created_at": "2026-03-15T12:05:05Z"
+  }
+]
+Useful filters
+- {{base_url}}/api/timetable/notifications/?unread=true
+- {{base_url}}/api/timetable/notifications/?action_required=true
+- {{base_url}}/api/timetable/notifications/?unread=true&action_required=true
+
+STEP 13: MARK NOTIFICATION AS READ
+Request
+- Method: PATCH
+- URL: {{base_url}}/api/timetable/notifications/{{notification_id}}/read/
+- Headers: Protected JSON headers
+Body
+{
+  "is_actioned": true
+}
+Expected
+- Status: 200 OK
+- Response returns updated notification with is_read=true
+
+STEP 14: CHATBOT BASIC CONVERSE (RAG CHAT INFERENCE)
+Request
+- Method: POST
+- URL: {{base_url}}/api/chatbot/converse/
+- Headers: Protected JSON headers
+Body
+{
+  "message": "How do I revise operating systems in 5 days?"
+}
+Expected
+- Status: 200 OK
+- Response example:
+{
+  "response": "Start with process management, then memory, then file systems...",
+  "tool": "rag_chat",
+  "context_used": true,
+  "conversation_id": 3
+}
+
+STEP 15: CHATBOT CONTINUE SAME CONVERSATION
+Request
+- Method: POST
+- URL: {{base_url}}/api/chatbot/converse/
+- Headers: Protected JSON headers
+Body
+{
+  "conversation_id": {{conversation_id}},
+  "message": "Give me this as a daily checklist."
+}
+Expected
+- Status: 200 OK
+- Same conversation_id is returned
+
+STEP 16: CHATBOT TOOL = ONBOARDING
+Request
+- Method: POST
+- URL: {{base_url}}/api/chatbot/converse/
+- Headers: Protected JSON headers
+Body
+{
+  "tool": "onboarding",
+  "onboarding": {
+    "goal_type": "Exam prep",
+    "exam_date": "2026-04-20",
+    "knowledge_level": "intermediate",
+    "daily_free_hours": 3,
+    "occupation": "Student",
+    "preferred_study_time": "evening",
+    "learning_style": "visual"
+  }
+}
+Expected
+- Status: 200 OK
+- Response has tool "onboarding" and saved profile data
+
+STEP 17: CHATBOT TOOL = GENERATE_TIMETABLE
+Request
+- Method: POST
+- URL: {{base_url}}/api/chatbot/converse/
+- Headers: Protected JSON headers
+Body
+{
+  "tool": "generate_timetable",
+  "generate_timetable": true
+}
+Expected
+- Status: 200 OK
+- Response has keys: response, tool, entries, timetable, generation, conversation_id
+
+STEP 18: CHATBOT TOOL = ADAPTIVE_RESCHEDULE
+Request
+- Method: POST
+- URL: {{base_url}}/api/chatbot/converse/
+- Headers: Protected JSON headers
+Body
+{
+  "tool": "adaptive_reschedule",
+  "adaptive_reschedule": {
+    "entry_id": {{entry_id}},
+    "reason": "I had no time because of assignment deadline"
+  }
+}
+Expected
+- Status: 200 OK
+- Response includes:
+  response, tool, feedback_analysis, strategy, generation, timetable, entries,
+  topic_adjustments, target_entry_id, extra_minutes_added, conversation_id
+
+Error example for invalid entry_id
+- Status: 400
+{
+  "error": "entry_id must be an integer for adaptive_reschedule.",
+  "tool": "adaptive_reschedule"
+}
+
+STEP 19: CHATBOT TOOL = OCR EXAM PARSER (MULTIPART)
+Request
+- Method: POST
+- URL: {{base_url}}/api/chatbot/converse/
+- Headers: Protected file upload headers
+- Body form-data:
+  - tool = ocr_exam_parser (Text)
+  - exam_image = <select image file> (File)
+Expected
+- Status: 200 OK
+- Response example:
+{
+  "response": "Exam timetable parsed. Please confirm degree, semester and subjects.",
+  "tool": "ocr_exam_parser",
+  "parsed": {
+    "subjects": [
+      {
+        "name": "Math",
+        "date": "2026-04-01",
+        "difficulty": "medium"
+      }
+    ]
+  },
+  "subjects_count": 1,
+  "conversation_id": 4
+}
+
+STEP 20: LIST CHAT CONVERSATIONS
+Request
+- Method: GET
+- URL: {{base_url}}/api/chatbot/conversations/
+- Headers: Protected JSON headers
+Expected
+- Status: 200 OK
+- Response example:
+[
+  {
+    "id": 4,
+    "started_at": "2026-03-15T13:00:00Z",
+    "message_count": 6
+  }
+]
+
+STEP 21: LIST MESSAGES OF A CONVERSATION
+Request
+- Method: GET
+- URL: {{base_url}}/api/chatbot/conversations/{{conversation_id}}/messages/
+- Headers: Protected JSON headers
+Expected
+- Status: 200 OK
+- Response example:
+[
+  {
+    "id": 10,
+    "conversation": 4,
+    "sender": "user",
+    "text": "I missed yesterday",
+    "timestamp": "2026-03-15T13:00:00Z"
+  },
+  {
+    "id": 11,
+    "conversation": 4,
+    "sender": "bot",
+    "text": "I can help reschedule that.",
+    "timestamp": "2026-03-15T13:00:01Z"
+  }
+]
+
+STEP 22: LOGOUT
+Request
+- Method: POST
+- URL: {{base_url}}/api/auth/logout/
+- Headers: Protected JSON headers
+Body
+{
+  "refresh": "{{refresh_token}}"
+}
+Expected
+- Status: 204 No Content (or 400 if token already invalid)
+
+============================================================
+COMMON ERROR RESPONSES FOR QUICK DEBUG
+============================================================
+
+1) Missing/invalid JWT
+- Status: 401
+{
+  "detail": "Authentication credentials were not provided."
+}
+or
+{
+  "detail": "Given token not valid for any token type",
+  "code": "token_not_valid"
+}
+
+2) Duplicate topic name in /api/timetable/chatbot/
+- Status: 400
+{
+  "name": ["Topic with this name already exists."]
+}
+
+3) Overlapping free slot in /api/timetable/chatbot/
+- Status: 400
+{
+  "non_field_errors": ["Free slot overlaps with an existing slot."]
+}
+
+4) Missing payload for explicitly selected chatbot tool
+- Status: 400
+{
+  "error": "Tool '<tool_name>' missing required payload.",
+  "tool": "<tool_name>"
+}
+
+5) Empty chatbot request
+- Status: 400
+{
+  "error": "No actionable input provided.",
+  "hint": "Send message/onboarding/generate_timetable/exam_image/tool."
+}
