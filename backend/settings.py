@@ -13,10 +13,21 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 import os
 from pathlib import Path
 
+
+def _csv_env(env_name):
+    raw = os.getenv(env_name, "")
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
 # Use environment variables for secrets & debug
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'unsafe-dev-secret')
 DEBUG = os.getenv('DJANGO_DEBUG', 'True') == 'True'
-ALLOWED_HOSTS = os.getenv('DJANGO_ALLOWED_HOSTS', '').split(',') if os.getenv('DJANGO_ALLOWED_HOSTS') else []
+ALLOWED_HOSTS = _csv_env("DJANGO_ALLOWED_HOSTS")
+if not ALLOWED_HOSTS:
+    railway_public_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+    if railway_public_domain:
+        ALLOWED_HOSTS = [railway_public_domain]
+    elif DEBUG:
+        ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent

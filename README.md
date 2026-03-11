@@ -6,7 +6,7 @@ Django REST Framework backend for conversational timetable planning, onboarding,
 - Django 5 + DRF
 - SimpleJWT authentication
 - SQLite (default)
-- SentenceTransformers for embeddings
+- SentenceTransformers for embeddings (optional ML extras)
 - Groq chat completion API
 - OCR parsing pipeline (`pytesseract` + `Pillow`) with graceful fallback
 - Celery scheduled tasks for reminders and auto-rescheduling
@@ -18,6 +18,11 @@ python -m venv .venv
 pip install -r requirements.txt
 python manage.py migrate
 python manage.py runserver
+```
+
+Optional local ML extras (needed for embedding generation command):
+```bash
+pip install -r requirements-ml.txt
 ```
 
 ## Core API Endpoints
