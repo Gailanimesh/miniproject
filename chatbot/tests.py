@@ -72,6 +72,9 @@ class ChatbotConversationTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["tool"], "generate_timetable")
         self.assertTrue(len(response.data["entries"]) > 0)
+        self.assertIn("timetable", response.data)
+        self.assertIn("generation", response.data)
+        self.assertIn("algorithm", response.data["timetable"])
 
     def test_rag_chat_fallback(self):
         response = self.client.post(
@@ -168,6 +171,14 @@ class ChatbotConversationTests(APITestCase):
         self.assertEqual(response.data["tool"], "adaptive_reschedule")
         self.assertEqual(response.data["strategy"]["max_chunk_minutes"], 30)
         self.assertTrue(len(response.data["entries"]) > 0)
+        self.assertIn("feedback_analysis", response.data)
+        self.assertIn("timetable", response.data)
+        self.assertIn("generation", response.data)
+        self.assertIn("topic_adjustments", response.data)
+        self.assertIn("algorithm", response.data["timetable"])
+        self.assertIn("ml_training", response.data["generation"])
+        self.assertIn("trained", response.data["generation"]["ml_training"])
+        self.assertIn("source", response.data["generation"]["ml_training"]["training"])
 
         topic.refresh_from_db()
         self.assertGreaterEqual(topic.priority, 2)
@@ -176,3 +187,59 @@ class ChatbotConversationTests(APITestCase):
         for entry in TimetableEntry.objects.filter(user=self.user, start__gte=now):
             duration = int((entry.end - entry.start).total_seconds() // 60)
             self.assertLessEqual(duration, 30)
+
+    def test_adaptive_reschedule_rejects_invalid_entry_id(self):
+        response = self.client.post(
+            self.url,
+            {
+                "tool": "adaptive_reschedule",
+                "adaptive_reschedule": {
+                    "entry_id": "abc",
+                    "reason": "I was busy yesterday.",
+                },
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["tool"], "adaptive_reschedule")
+        self.assertIn("entry_id must be an integer", response.data["error"])
+
+    def test_adaptive_reschedule_auto_mode_without_payload(self):
+        UserProfile.objects.create(
+            user=self.user,
+            goal_type="Semester Exam",
+            knowledge_level="intermediate",
+            daily_free_hours=2,
+        )
+        Topic.objects.create(
+            user=self.user,
+            name="Operating Systems",
+            estimated_minutes=90,
+            priority=1,
+        )
+
+        now = timezone.now()
+        FreeSlot.objects.create(
+            user=self.user,
+            start=now + timedelta(hours=1),
+            end=now + timedelta(hours=3),
+        )
+
+        gen_response = self.client.post(
+            self.url,
+            {"tool": "generate_timetable", "generate_timetable": True},
+            format="json",
+        )
+        self.assertEqual(gen_response.status_code, status.HTTP_200_OK)
+
+        response = self.client.post(
+            self.url,
+            {"tool": "adaptive_reschedule"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["tool"], "adaptive_reschedule")
+        self.assertIn("generation", response.data)
+        self.assertIn("timetable", response.data)

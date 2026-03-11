@@ -5,6 +5,7 @@ import numpy as np
 import requests
 from django.db.models import Count
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from dotenv import load_dotenv
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
@@ -129,6 +130,41 @@ def _upsert_exam_subjects(user, parsed_data):
     return created_or_updated
 
 
+def _serialize_timetable_entry(entry):
+    duration_minutes = int((entry.end - entry.start).total_seconds() // 60)
+    return {
+        "id": entry.id,
+        "topic": entry.topic.name,
+        "topic_id": entry.topic_id,
+        "start": entry.start,
+        "end": entry.end,
+        "duration_minutes": duration_minutes,
+        "done": entry.done,
+    }
+
+
+def _build_timetable_payload(entries, strategy=None, generation_meta=None):
+    generation_meta = generation_meta or {}
+    ai_used = bool(generation_meta.get("ai_used"))
+
+    payload = {
+        "generated_at": timezone.now().isoformat(),
+        "algorithm": generation_meta.get("algorithm", "unknown"),
+        "ai_used": ai_used,
+        "fallback_used": not ai_used,
+        "entries": [_serialize_timetable_entry(entry) for entry in entries],
+    }
+
+    if strategy is not None:
+        payload["max_chunk_minutes"] = strategy.max_chunk_minutes
+
+    reason = generation_meta.get("reason")
+    if reason:
+        payload["reason"] = reason
+
+    return payload
+
+
 def _handle_onboarding(request):
     if not isinstance(request.data.get("onboarding"), dict):
         return None
@@ -157,29 +193,31 @@ def _handle_timetable_generation(request):
     if not request.data.get("generate_timetable"):
         return None
 
-    entries = generate_timetable_for_user(request.user)
-    data = [
-        {
-            "id": entry.id,
-            "topic": entry.topic.name,
-            "start": entry.start,
-            "end": entry.end,
-            "done": entry.done,
-        }
-        for entry in entries
-    ]
+    entries, generation_meta = generate_timetable_for_user(
+        request.user,
+        include_metadata=True,
+        use_model_priority=True,
+    )
+    entries = list(entries)
+    entries_payload = [_serialize_timetable_entry(entry) for entry in entries]
+    timetable_payload = _build_timetable_payload(
+        entries=entries,
+        generation_meta=generation_meta,
+    )
 
     return Response(
         {
             "response": "Timetable generated successfully.",
             "tool": "generate_timetable",
-            "entries": data,
+            "entries": entries_payload,
+            "timetable": timetable_payload,
+            "generation": generation_meta,
         },
         status=status.HTTP_200_OK,
     )
 
 
-def _handle_adaptive_reschedule(request):
+def _handle_adaptive_reschedule(request, force=False):
     payload = request.data.get("adaptive_reschedule")
     if isinstance(payload, dict):
         reason = payload.get("reason", "")
@@ -191,55 +229,73 @@ def _handle_adaptive_reschedule(request):
         reason = request.data.get("reason", "")
         entry_id = request.data.get("entry_id")
 
-    if not reason and entry_id in (None, ""):
-        return None
+    parsed_entry_id = None
+    if entry_id not in (None, ""):
+        try:
+            parsed_entry_id = int(entry_id)
+        except (TypeError, ValueError):
+            return Response(
+                {
+                    "error": "entry_id must be an integer for adaptive_reschedule.",
+                    "tool": "adaptive_reschedule",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    if not reason and parsed_entry_id is None:
+        if not force:
+            return None
+        reason = "missed planned study session"
 
     result = adaptive_reschedule_for_user(
         user=request.user,
         reason=reason,
-        entry_id=entry_id,
+        entry_id=parsed_entry_id,
     )
 
     strategy = result["strategy"]
-    entries = result["entries"]
-    entries_payload = [
-        {
-            "id": entry.id,
-            "topic": entry.topic.name,
-            "start": entry.start,
-            "end": entry.end,
-            "done": entry.done,
-        }
-        for entry in entries
-    ]
+    analysis = result["analysis"]
+    entries = list(result["entries"])
+    entries_payload = [_serialize_timetable_entry(entry) for entry in entries]
+    generation_meta = result.get("generation_meta", {})
+    timetable_payload = _build_timetable_payload(
+        entries=entries,
+        strategy=strategy,
+        generation_meta=generation_meta,
+    )
+    topic = result.get("topic")
 
-    if not entries:
-        return Response(
-            {
-                "response": result["message"],
-                "tool": "adaptive_reschedule",
-                "strategy": {
-                    "action": strategy.action,
-                    "max_chunk_minutes": strategy.max_chunk_minutes,
-                    "priority_boost": strategy.priority_boost,
-                    "extra_minutes_ratio": strategy.extra_minutes_ratio,
-                },
-                "entries": [],
-            },
-            status=status.HTTP_200_OK,
-        )
+    strategy_payload = (
+        strategy.to_dict() if hasattr(strategy, "to_dict") else {
+            "action": strategy.action,
+            "max_chunk_minutes": strategy.max_chunk_minutes,
+            "priority_boost": strategy.priority_boost,
+            "extra_minutes_ratio": strategy.extra_minutes_ratio,
+        }
+    )
+    analysis_payload = analysis.to_dict() if hasattr(analysis, "to_dict") else analysis
+
+    response_message = (
+        "I have rescheduled your upcoming plan based on your feedback."
+        if entries
+        else result["message"]
+    )
 
     return Response(
         {
-            "response": "I have rescheduled your upcoming plan based on your feedback.",
+            "response": response_message,
             "tool": "adaptive_reschedule",
-            "strategy": {
-                "action": strategy.action,
-                "max_chunk_minutes": strategy.max_chunk_minutes,
-                "priority_boost": strategy.priority_boost,
-                "extra_minutes_ratio": strategy.extra_minutes_ratio,
-            },
+            "feedback_analysis": analysis_payload,
+            "strategy": strategy_payload,
+            "generation": generation_meta,
+            "timetable": timetable_payload,
             "entries": entries_payload,
+            "topic_adjustments": {
+                "topic_id": getattr(topic, "id", None),
+                "topic_name": getattr(topic, "name", None),
+                "before": result.get("topic_before"),
+                "after": result.get("topic_after"),
+            },
             "target_entry_id": getattr(result.get("target_entry"), "id", None),
             "extra_minutes_added": result.get("extra_minutes", 0),
         },
@@ -365,7 +421,7 @@ class ChatbotConversationView(APIView):
         handlers = {
             "onboarding": lambda: _handle_onboarding(request),
             "generate_timetable": lambda: _handle_timetable_generation(request),
-            "adaptive_reschedule": lambda: _handle_adaptive_reschedule(request),
+            "adaptive_reschedule": lambda: _handle_adaptive_reschedule(request, force=True),
             "ocr_exam_parser": lambda: _handle_ocr_parser(request),
             "rag_chat": lambda: _handle_rag_chat(user_message),
         }

@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Topic, FreeSlot, TimetableEntry
+from .models import CompletionCheck, FreeSlot, TimetableEntry, Topic, UserNotification
 
 class TopicSerializer(serializers.ModelSerializer):
     class Meta:
@@ -36,3 +36,51 @@ class TimetableEntrySerializer(serializers.ModelSerializer):
     class Meta:
         model = TimetableEntry
         fields = ['id', 'topic', 'start', 'end', 'notified', 'done']
+
+
+class UserNotificationSerializer(serializers.ModelSerializer):
+    entry_id = serializers.IntegerField(source="entry.id", read_only=True)
+
+    class Meta:
+        model = UserNotification
+        fields = [
+            "id",
+            "entry_id",
+            "notification_type",
+            "title",
+            "message",
+            "payload",
+            "scheduled_for",
+            "sent_at",
+            "action_due_at",
+            "is_read",
+            "is_actioned",
+            "created_at",
+        ]
+
+
+class CompletionCheckSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CompletionCheck
+        fields = [
+            "entry",
+            "asked_at",
+            "response_received_at",
+            "completed",
+            "response_text",
+            "quiz_question",
+            "quiz_answer",
+            "auto_rescheduled",
+        ]
+        read_only_fields = [
+            "entry",
+            "asked_at",
+            "response_received_at",
+            "auto_rescheduled",
+        ]
+
+
+class CompletionCheckResponseSerializer(serializers.Serializer):
+    completed = serializers.BooleanField()
+    response_text = serializers.CharField(required=False, allow_blank=True)
+    quiz_answer = serializers.CharField(required=False, allow_blank=True)
