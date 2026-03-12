@@ -20,6 +20,89 @@ python manage.py migrate
 python manage.py runserver
 ```
 
+## PostgreSQL Deployment Procedure
+
+This backend now supports three database modes in `backend/settings.py`:
+- `DATABASE_URL` set: uses that URL (recommended for production platforms).
+- `POSTGRES_DB` set: uses discrete Postgres env vars.
+- Neither set: falls back to local SQLite (`db.sqlite3`).
+
+### 1) Install dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### 2) Create Postgres database and user
+Use your own values for DB name/user/password. Example SQL:
+```sql
+CREATE DATABASE ai_timetable;
+CREATE USER ai_timetable_user WITH PASSWORD 'strong_password_here';
+GRANT ALL PRIVILEGES ON DATABASE ai_timetable TO ai_timetable_user;
+```
+
+### 3) Configure environment variables
+Choose one approach.
+
+Approach A (preferred):
+```bash
+DATABASE_URL=postgresql://ai_timetable_user:strong_password_here@localhost:5432/ai_timetable
+```
+
+Approach B:
+```bash
+POSTGRES_DB=ai_timetable
+POSTGRES_USER=ai_timetable_user
+POSTGRES_PASSWORD=strong_password_here
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+```
+
+Always set production-safe values too:
+```bash
+DJANGO_DEBUG=False
+DJANGO_SECRET_KEY=<your-strong-secret>
+DJANGO_ALLOWED_HOSTS=<your-domain>
+```
+
+Local development tip:
+- `backend/settings.py` now loads root `.env`, so you can keep local DB values in `c:\mini project\.env`.
+
+Example local `.env`:
+```bash
+DJANGO_DEBUG=True
+DJANGO_SECRET_KEY=unsafe-dev-secret
+DJANGO_ALLOWED_HOSTS=127.0.0.1,localhost
+DATABASE_URL=postgresql://ai_timetable_user:strong_password_here@localhost:5432/ai_timetable
+```
+
+Railway deployment tip:
+- Use the same variable names (`DATABASE_URL`, `DJANGO_DEBUG`, `DJANGO_SECRET_KEY`, `DJANGO_ALLOWED_HOSTS`), but set them in Railway service Variables.
+- Do not rely on uploading local `.env` to Railway.
+- If `DATABASE_URL` changes, redeploy your service and run `python manage.py migrate` on Railway.
+
+### 4) Run migrations on PostgreSQL
+```bash
+python manage.py migrate
+```
+
+### 5) Optional: move existing SQLite data to PostgreSQL
+If you already have useful local SQLite data:
+```bash
+python manage.py dumpdata --exclude auth.permission --exclude contenttypes > data.json
+python manage.py loaddata data.json
+```
+
+### 6) Deploy commands
+- Web: `gunicorn backend.wsgi:application --bind 0.0.0.0:$PORT`
+- Worker: `celery -A backend.celery:app worker -l info`
+- Beat: `celery -A backend.celery:app beat -l info`
+
+### 7) Verify database engine after deploy
+```bash
+python manage.py shell -c "from django.conf import settings; print(settings.DATABASES['default']['ENGINE'])"
+```
+Expected output: `django.db.backends.postgresql`
+
 Optional local ML extras (needed for embedding generation command):
 ```bash
 pip install -r requirements-ml.txt
