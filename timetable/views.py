@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
@@ -32,22 +33,33 @@ class ChatbotSaveView(APIView):
     """
     permission_classes = [permissions.IsAuthenticated]
 
+    @transaction.atomic
     def post(self, request):
         user = request.user
-        topics = request.data.get('topics', [])
-        free_slots = request.data.get('free_slots', [])
+        topics_data = request.data.get('topics', [])
+        free_slots_data = request.data.get('free_slots', [])
 
-        # upsert topics
-        for t in topics:
+        # Validate and prepare topics
+        topics_to_create = []
+        for t in topics_data:
             serializer = TopicSerializer(data=t, context={'request': request})
             serializer.is_valid(raise_exception=True)
-            serializer.save(user=user)
+            # Use get_or_create logic or bulk_create as appropriate. 
+            # For simplicity and performance, we'll collect valid objects.
+            topics_to_create.append(Topic(user=user, **serializer.validated_data))
+        
+        if topics_to_create:
+            Topic.objects.bulk_create(topics_to_create, ignore_conflicts=True)
 
-        # add free slots incrementally (no delete)
-        for fs in free_slots:
+        # Validate and prepare free slots
+        slots_to_create = []
+        for fs in free_slots_data:
             fs_serializer = FreeSlotSerializer(data=fs, context={'request': request})
             fs_serializer.is_valid(raise_exception=True)
-            fs_serializer.save(user=user)
+            slots_to_create.append(FreeSlot(user=user, **fs_serializer.validated_data))
+        
+        if slots_to_create:
+            FreeSlot.objects.bulk_create(slots_to_create)
 
         entries = generate_timetable_for_user(user, use_model_priority=True)
         out = TimetableEntrySerializer(entries, many=True)

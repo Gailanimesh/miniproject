@@ -4,10 +4,15 @@ from django.utils import timezone
 
 class Topic(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='topics')
-    name = models.CharField(max_length=255)
+    name = models.CharField(max_length=255, db_index=True)
     estimated_minutes = models.PositiveIntegerField(default=60)
     priority = models.IntegerField(default=1)  # higher = more important
     completed_minutes = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['user', 'name']),
+        ]
 
     def __str__(self):
         return self.name
@@ -19,6 +24,10 @@ class FreeSlot(models.Model):
 
     class Meta:
         ordering = ['start']
+        indexes = [
+            models.Index(fields=['user', 'start']),
+            models.Index(fields=['user', 'end']),
+        ]
 
 class TimetableEntry(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='timetable_entries')
@@ -30,6 +39,10 @@ class TimetableEntry(models.Model):
 
     class Meta:
         ordering = ['start']
+        indexes = [
+            models.Index(fields=['user', 'start']),
+            models.Index(fields=['user', 'done', 'start']),
+        ]
 
 class Reminder(models.Model):
     entry = models.ForeignKey(TimetableEntry, on_delete=models.CASCADE, related_name='reminders')
