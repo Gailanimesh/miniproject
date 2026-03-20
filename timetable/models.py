@@ -29,6 +29,9 @@ class FreeSlot(models.Model):
             models.Index(fields=['user', 'end']),
         ]
 
+    def __str__(self):
+        return f"FreeSlot {self.start:%Y-%m-%d %H:%M} → {self.end:%H:%M}"
+
 class TimetableEntry(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='timetable_entries')
     topic = models.ForeignKey(Topic, on_delete=models.CASCADE, related_name='entries')
@@ -44,10 +47,16 @@ class TimetableEntry(models.Model):
             models.Index(fields=['user', 'done', 'start']),
         ]
 
+    def __str__(self):
+        return f"{self.topic.name} @ {self.start:%Y-%m-%d %H:%M}"
+
 class Reminder(models.Model):
     entry = models.ForeignKey(TimetableEntry, on_delete=models.CASCADE, related_name='reminders')
     remind_at = models.DateTimeField()
     sent = models.BooleanField(default=False)
+
+    def __str__(self):
+        return f"Reminder for Entry #{self.entry_id} at {self.remind_at:%Y-%m-%d %H:%M}"
 
 
 class ExamSubject(models.Model):
@@ -115,6 +124,9 @@ class UserNotification(models.Model):
             models.Index(fields=["scheduled_for", "sent_at"]),
         ]
 
+    def __str__(self):
+        return f"[{self.notification_type}] {self.title}"
+
 
 class CompletionCheck(models.Model):
     entry = models.OneToOneField(
@@ -139,3 +151,6 @@ class CompletionCheck(models.Model):
 
     class Meta:
         ordering = ["-asked_at"]
+
+    def __str__(self):
+        return f"CompletionCheck for Entry #{self.entry_id}"

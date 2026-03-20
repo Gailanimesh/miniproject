@@ -15,7 +15,7 @@ from timetable.models import ExamSubject, Topic
 from users.models import UserProfile
 from users.serializers import UserProfileSerializer
 
-from .models import Conversation, Document, Message
+from .models import Conversation, Document, Message, generate_conversation_title
 from .serializers import ConversationSerializer, MessageSerializer
 from .services.feedback_analyzer import adaptive_reschedule_for_user
 from .services.ocr_pipeline import extract_text_from_image, parse_exam_timetable
@@ -383,6 +383,11 @@ def _persist_messages(request, response, user_message, conversation):
 
     if conversation is None:
         conversation = Conversation.objects.create(user=request.user)
+        # Auto-generate title from the first user message (one-time, best-effort)
+        title = generate_conversation_title(user_message)
+        if title:
+            conversation.title = title
+            conversation.save(update_fields=["title"])
 
     if user_message:
         Message.objects.create(

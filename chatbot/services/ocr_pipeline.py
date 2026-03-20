@@ -1,4 +1,5 @@
 import importlib
+import io
 import re
 from datetime import datetime
 
@@ -17,11 +18,57 @@ def _normalize_date(raw_date):
     return None
 
 
+def _is_pdf(file_source):
+    """Check if the file is a PDF by reading its magic bytes."""
+    try:
+        if hasattr(file_source, "read"):
+            header = file_source.read(5)
+            file_source.seek(0)
+            return header == b"%PDF-"
+        return str(file_source).lower().endswith(".pdf")
+    except Exception:
+        return False
+
+
+def extract_text_from_pdf(file_source):
+    """
+    Extract plain text from a PDF file using pypdf.
+    Returns an empty string if pypdf is unavailable or extraction fails.
+    """
+    try:
+        pypdf = importlib.import_module("pypdf")
+    except ModuleNotFoundError:
+        return ""
+
+    try:
+        if hasattr(file_source, "seek"):
+            file_source.seek(0)
+            data = file_source.read()
+            file_source.seek(0)
+        else:
+            with open(file_source, "rb") as f:
+                data = f.read()
+
+        reader = pypdf.PdfReader(io.BytesIO(data))
+        pages_text = []
+        for page in reader.pages:
+            page_text = page.extract_text() or ""
+            pages_text.append(page_text)
+        return "\n".join(pages_text)
+    except Exception:
+        return ""
+
+
 def extract_text_from_image(image_source):
     """
-    Accepts a file object or a file path and returns OCR text.
+    Accepts a file object or a file path and returns OCR text via Tesseract.
+    Automatically handles PDFs by delegating to extract_text_from_pdf().
     Returns an empty string if OCR libraries are unavailable.
     """
+    # Auto-detect PDF and delegate
+    if _is_pdf(image_source):
+        return extract_text_from_pdf(image_source)
+
     try:
         pytesseract = importlib.import_module("pytesseract")
         pil_image = importlib.import_module("PIL.Image")
@@ -39,7 +86,7 @@ def extract_text_from_image(image_source):
 
 def parse_exam_timetable(text, llm=None):
     """
-    Parse OCR text into structured exam data.
+    Parse extracted text into structured exam data.
     Optional llm callback can override deterministic parsing when provided.
     """
     if llm:
@@ -89,3 +136,4 @@ def parse_exam_timetable(text, llm=None):
         )
 
     return parsed
+

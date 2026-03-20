@@ -1,0 +1,14 @@
+Found 47 test(s).
+System check identified no issues (0 silenced).
+Creating test database for alias 'default'...
+
+.................EOF marker not found
+..............................
+----------------------------------------------------------------------
+Ran 47 tests in 6.302s
+
+OK
+Destroying test database for alias 'default'...
+
+
+EXIT: 0
