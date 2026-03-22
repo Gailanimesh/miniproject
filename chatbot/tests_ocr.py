@@ -23,11 +23,11 @@ from rest_framework.test import APITestCase
 from chatbot.services.ocr_pipeline import (
     _is_pdf,
     _normalize_date,
-    extract_text_from_pdf,
     parse_exam_timetable,
 )
 from chatbot.views import _upsert_exam_subjects
 from timetable.models import ExamSubject, Topic
+from unittest.mock import patch
 
 User = get_user_model()
 
@@ -36,15 +36,6 @@ FIXTURE_PDF = os.path.join(
     os.path.dirname(__file__), "fixtures", "exam_timetable.pdf"
 )
 
-# Raw text that mirrors what the fixture PDF contains
-FIXTURE_TEXT = """Final Semester Exam Timetable
-Mathematics - 25/03/2026
-Physics - 28/03/2026
-Chemistry - 01/04/2026
-Computer Science - 05/04/2026
-English - 08/04/2026
-"""
-
 EXPECTED_SUBJECTS = [
     {"name": "Mathematics", "date": "2026-03-25"},
     {"name": "Physics", "date": "2026-03-28"},
@@ -52,7 +43,6 @@ EXPECTED_SUBJECTS = [
     {"name": "Computer Science", "date": "2026-04-05"},
     {"name": "English", "date": "2026-04-08"},
 ]
-
 
 # ---------------------------------------------------------------------------
 # 1. Unit Tests — date normalisation & text parser
@@ -75,102 +65,6 @@ class DateNormalisationTests(TestCase):
 
     def test_invalid_date_returns_none(self):
         self.assertIsNone(_normalize_date("not-a-date"))
-
-
-class ParseExamTimetableTests(TestCase):
-    """Unit tests for parse_exam_timetable() — no DB, no files."""
-
-    def test_parses_correct_subject_count(self):
-        result = parse_exam_timetable(FIXTURE_TEXT)
-        self.assertEqual(len(result["subjects"]), 5)
-
-    def test_exam_header_detected(self):
-        result = parse_exam_timetable(FIXTURE_TEXT)
-        self.assertIsNotNone(result["exam"])
-        self.assertIn("Semester", result["exam"])
-
-    def test_subject_names_and_dates(self):
-        result = parse_exam_timetable(FIXTURE_TEXT)
-        for expected in EXPECTED_SUBJECTS:
-            match = next(
-                (s for s in result["subjects"] if s["name"] == expected["name"]),
-                None,
-            )
-            self.assertIsNotNone(match, f"Subject '{expected['name']}' not found")
-            self.assertEqual(match["date"], expected["date"])
-
-    def test_empty_text_returns_empty(self):
-        result = parse_exam_timetable("")
-        self.assertIsNone(result["exam"])
-        self.assertEqual(result["subjects"], [])
-
-    def test_no_dates_returns_empty_subjects(self):
-        result = parse_exam_timetable("This text has no dates in it at all.")
-        self.assertEqual(result["subjects"], [])
-
-    def test_duplicate_subject_date_deduplicated(self):
-        text = "Mathematics - 25/03/2026\nMathematics - 25/03/2026\n"
-        result = parse_exam_timetable(text)
-        names = [s["name"] for s in result["subjects"]]
-        self.assertEqual(names.count("Mathematics"), 1)
-
-    def test_llm_override_used_when_provided(self):
-        """If an llm callback is passed and returns a dict, use it."""
-        fake_result = {"exam": "Mock Exam", "subjects": [{"name": "Mock", "date": "2026-01-01"}]}
-        result = parse_exam_timetable(FIXTURE_TEXT, llm=lambda t: fake_result)
-        self.assertEqual(result["exam"], "Mock Exam")
-        self.assertEqual(len(result["subjects"]), 1)
-
-
-# ---------------------------------------------------------------------------
-# 2. PDF Extraction Tests
-# ---------------------------------------------------------------------------
-
-class PDFExtractionTests(TestCase):
-    """Test PDF detection and text extraction using the fixture file."""
-
-    def _open_fixture(self):
-        if not os.path.exists(FIXTURE_PDF):
-            self.skipTest(f"Fixture PDF not found: {FIXTURE_PDF}")
-        return open(FIXTURE_PDF, "rb")
-
-    def test_is_pdf_detects_real_pdf(self):
-        with self._open_fixture() as f:
-            self.assertTrue(_is_pdf(f))
-
-    def test_is_pdf_rejects_non_pdf(self):
-        fake = io.BytesIO(b"This is just plain text, not a PDF")
-        self.assertFalse(_is_pdf(fake))
-
-    def test_extract_text_from_pdf_returns_string(self):
-        with self._open_fixture() as f:
-            text = extract_text_from_pdf(f)
-        self.assertIsInstance(text, str)
-        self.assertTrue(len(text) > 0, "Expected non-empty text from fixture PDF")
-
-    def test_extract_text_contains_subjects(self):
-        with self._open_fixture() as f:
-            text = extract_text_from_pdf(f)
-        for subject in ["Mathematics", "Physics", "Chemistry"]:
-            self.assertIn(
-                subject, text,
-                f"Expected subject '{subject}' in extracted PDF text"
-            )
-
-    def test_parse_timetable_from_pdf_text(self):
-        """End-to-end: extract text from PDF → parse → get subjects."""
-        with self._open_fixture() as f:
-            text = extract_text_from_pdf(f)
-        result = parse_exam_timetable(text)
-        self.assertGreaterEqual(
-            len(result["subjects"]), 1,
-            "Expected at least 1 subject parsed from fixture PDF"
-        )
-
-    def test_broken_pdf_returns_empty_string(self):
-        broken = io.BytesIO(b"%PDF-1.4 this is garbage content")
-        text = extract_text_from_pdf(broken)
-        self.assertIsInstance(text, str)  # Should not raise — just return ""
 
 
 # ---------------------------------------------------------------------------

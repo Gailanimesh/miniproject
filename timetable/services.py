@@ -40,4 +40,4 @@ def schedule_timetable_for_user(user, max_chunk_minutes=60):
     TimetableEntry.objects.filter(user=user, start__gte=timezone.now()).delete()
     if entries:
         TimetableEntry.objects.bulk_create(entries)
-    return TimetableEntry.objects.filter(user=user).order_by('start')
+    return TimetableEntry.objects.filter(user=user).select_related("topic").order_by('start')

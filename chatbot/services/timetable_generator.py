@@ -237,7 +237,7 @@ def generate_timetable_for_user(
 
     TimetableEntry.objects.filter(user=user, start__gte=timezone.now()).delete()
     TimetableEntry.objects.bulk_create(generated_entries)
-    saved_entries = TimetableEntry.objects.filter(user=user).order_by("start")
+    saved_entries = TimetableEntry.objects.filter(user=user).select_related("topic").order_by("start")
     if include_metadata:
         metadata = {
             "algorithm": "score_weighted_exam_aware",

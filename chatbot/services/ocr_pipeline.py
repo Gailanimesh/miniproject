@@ -18,6 +18,87 @@ def _normalize_date(raw_date):
     return None
 
 
+import base64
+import os
+import requests
+import json
+
+def extract_text_from_file_with_gemini(file_source, mime_type="image/jpeg", user_prompt=""):
+    """
+    Extract structured JSON data securely via Google Gemini API.
+    Dynamically identifies branches and isolates subjects based on user prompt.
+    """
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return {"exam": None, "subjects": [], "error": "GEMINI_API_KEY is not configured."}
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+
+    try:
+        if hasattr(file_source, "seek"):
+            file_source.seek(0)
+            file_data = file_source.read()
+        else:
+            with open(file_source, "rb") as f:
+                file_data = f.read()
+    except Exception as e:
+        return {"exam": None, "subjects": [], "error": f"File read error: {e}"}
+
+    b64_data = base64.b64encode(file_data).decode("utf-8")
+
+    sys_text = (
+        "Analyze this timetable image and output a raw JSON dictionary without Markdown blocks. "
+        "Strictly adhere to this structure: "
+        '{"has_multiple_branches": boolean, '
+        '"detected_branches": ["string"], '
+        '"exam": "string", '
+        '"subjects": [{"name": "string", "date": "YYYY-MM-DD", "difficulty": "medium"}], '
+        '"branch_subjects": {"branch_name": [{"name": "string", "date": "YYYY-MM-DD", "difficulty": "medium"}]} }. '
+        "If there are multiple branches/streams in the timetable (like CE, CS A, EE, etc.): "
+        f"1. Check if the user specified their branch here: '{user_prompt}'. "
+        "2. If the user explicitly specified a branch, ignore the others and populate the main 'subjects' array ONLY with their branch's subjects. "
+        "3. If the user did NOT specify a branch, leave the main 'subjects' array EMPTY [] but populate 'branch_subjects' with a map of every branch name to its specific array of subjects. Set 'has_multiple_branches' to true. "
+        "If it is a single-branch timetable, just populate the main 'subjects' array normally."
+    )
+
+    payload = {
+        "contents": [{
+            "parts": [
+                {"text": sys_text},
+                {
+                    "inline_data": {
+                        "mime_type": mime_type,
+                        "data": b64_data
+                    }
+                }
+            ]
+        }]
+    }
+    
+    headers = {"Content-Type": "application/json"}
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        resp_json = response.json()
+    except Exception as e:
+        return {"exam": None, "subjects": [], "error": f"Gemini API error: {e}"}
+
+    parts = resp_json.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])
+    extracted = parts[0].get("text", "")
+    
+    # Clean up standard markdown markers if the model ignored our rule
+    extracted = extracted.strip()
+    if extracted.startswith("```json"):
+        extracted = extracted[7:]
+    if extracted.endswith("```"):
+        extracted = extracted[:-3]
+        
+    try:
+        parsed_json = json.loads(extracted.strip())
+        return parsed_json
+    except json.JSONDecodeError:
+        return {"exam": None, "subjects": [], "error": "Gemini returned invalid JSON."}
+
 def _is_pdf(file_source):
     """Check if the file is a PDF by reading its magic bytes."""
     try:
@@ -29,111 +110,23 @@ def _is_pdf(file_source):
     except Exception:
         return False
 
-
-def extract_text_from_pdf(file_source):
+def extract_text_from_image(image_source, user_prompt=""):
     """
-    Extract plain text from a PDF file using pypdf.
-    Returns an empty string if pypdf is unavailable or extraction fails.
+    Accepts a file object or a file path and returns structured JSON timetable via Gemini 2.5-flash.
+    Automatically handles PDFs directly through Gemini natively.
     """
-    try:
-        pypdf = importlib.import_module("pypdf")
-    except ModuleNotFoundError:
-        return ""
-
-    try:
-        if hasattr(file_source, "seek"):
-            file_source.seek(0)
-            data = file_source.read()
-            file_source.seek(0)
-        else:
-            with open(file_source, "rb") as f:
-                data = f.read()
-
-        reader = pypdf.PdfReader(io.BytesIO(data))
-        pages_text = []
-        for page in reader.pages:
-            page_text = page.extract_text() or ""
-            pages_text.append(page_text)
-        return "\n".join(pages_text)
-    except Exception:
-        return ""
-
-
-def extract_text_from_image(image_source):
-    """
-    Accepts a file object or a file path and returns OCR text via Tesseract.
-    Automatically handles PDFs by delegating to extract_text_from_pdf().
-    Returns an empty string if OCR libraries are unavailable.
-    """
-    # Auto-detect PDF and delegate
     if _is_pdf(image_source):
-        return extract_text_from_pdf(image_source)
-
-    try:
-        pytesseract = importlib.import_module("pytesseract")
-        pil_image = importlib.import_module("PIL.Image")
-    except ModuleNotFoundError:
-        return ""
-
-    try:
-        if hasattr(image_source, "seek"):
-            image_source.seek(0)
-        image = pil_image.open(image_source)
-        return pytesseract.image_to_string(image) or ""
-    except Exception:
-        return ""
+        return extract_text_from_file_with_gemini(image_source, mime_type="application/pdf", user_prompt=user_prompt)
+    return extract_text_from_file_with_gemini(image_source, mime_type="image/jpeg", user_prompt=user_prompt)
 
 
 def parse_exam_timetable(text, llm=None):
     """
-    Parse extracted text into structured exam data.
-    Optional llm callback can override deterministic parsing when provided.
+    Legacy parser. Redundant when using strictly structured JSON from Gemini.
+    Returns the parsed dictionary if it's already a dict, otherwise empty default.
     """
-    if llm:
-        try:
-            llm_result = llm(text)
-            if isinstance(llm_result, dict):
-                return llm_result
-        except Exception:
-            pass
-
-    parsed = {"exam": None, "subjects": []}
-    if not text:
-        return parsed
-
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    for line in lines[:3]:
-        lower_line = line.lower()
-        if any(tag in lower_line for tag in ["exam", "semester", "internal", "final"]):
-            parsed["exam"] = line
-            break
-
-    seen = set()
-    for line in lines:
-        match = DATE_REGEX.search(line)
-        if not match:
-            continue
-
-        raw_date = match.group(0)
-        normalized_date = _normalize_date(raw_date)
-        if not normalized_date:
-            continue
-
-        subject_name = line.replace(raw_date, "").strip(" -:\t")
-        if not subject_name:
-            continue
-
-        key = (subject_name.lower(), normalized_date)
-        if key in seen:
-            continue
-        seen.add(key)
-
-        parsed["subjects"].append(
-            {
-                "name": subject_name,
-                "date": normalized_date,
-            }
-        )
-
-    return parsed
+    if isinstance(text, dict):
+        return text
+    
+    return {"exam": None, "subjects": []}
 

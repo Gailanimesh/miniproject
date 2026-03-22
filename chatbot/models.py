@@ -55,6 +55,7 @@ class Conversation(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='conversations')
     title = models.CharField(max_length=255, blank=True, default='')
     started_at = models.DateTimeField(auto_now_add=True)
+    pending_ocr_data = models.JSONField(null=True, blank=True)
 
     def __str__(self):
         if self.title:

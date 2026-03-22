@@ -52,7 +52,7 @@ def call_groq_api(prompt, context, system_prompt):
         "Content-Type": "application/json",
     }
     payload = {
-        "model": "openai/gpt-oss-120b",
+        "model": "llama-3.1-8b-instant",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
@@ -303,18 +303,80 @@ def _handle_adaptive_reschedule(request, force=False):
     )
 
 
-def _handle_ocr_parser(request):
+def _handle_stateful_ocr_reply(request, conversation, user_message):
+    pending_data = conversation.pending_ocr_data
+    branch_subjects = pending_data.get("branch_subjects", {})
+    
+    matched_branch = None
+    for branch in branch_subjects.keys():
+        if branch.lower() in user_message.lower():
+            matched_branch = branch
+            break
+            
+    if not matched_branch:
+        prompt = user_message
+        sys_prompt = f"You are extracting the chosen stream. Choices: {list(branch_subjects.keys())}. Reply with ONLY the exact name of the selected choice from the list. If none match, reply 'NONE'."
+        reply = call_groq_api(prompt, "", sys_prompt)
+        matched_branch = reply.strip()
+        
+    if matched_branch in branch_subjects:
+        subjects_to_save = branch_subjects[matched_branch]
+        parsed = {"subjects": subjects_to_save}
+        subjects = _upsert_exam_subjects(request.user, parsed)
+        
+        conversation.pending_ocr_data = None
+        conversation.save(update_fields=["pending_ocr_data"])
+        
+        return Response(
+            {
+                "response": f"Exam timetable for {matched_branch} parsed and saved! You can now generate your timetable.",
+                "tool": "ocr_exam_parser",
+                "parsed": parsed,
+                "subjects_count": len(subjects),
+            },
+            status=status.HTTP_200_OK,
+        )
+    else:
+        return Response(
+            {
+                "response": "I couldn't identify that branch from the timetable. Please ensure you type one of: " + ", ".join(branch_subjects.keys()),
+                "tool": "ocr_exam_parser_need_branch",
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+def _handle_ocr_parser(request, conversation=None):
     image = request.FILES.get("exam_image")
     if not image:
         return None
 
-    extracted_text = extract_text_from_image(image)
-    parsed = parse_exam_timetable(extracted_text)
+    user_message = request.data.get("message", "")
+    parsed = extract_text_from_image(image, user_prompt=user_message)
+
+    if parsed.get("has_multiple_branches") and not parsed.get("subjects"):
+        if conversation:
+            conversation.pending_ocr_data = parsed
+            conversation.save(update_fields=["pending_ocr_data"])
+            
+        branches_str = ", ".join(parsed.get("detected_branches", []))
+        return Response(
+            {
+                "response": f"I detected multiple branches in this timetable ({branches_str}). Which stream are you in?",
+                "tool": "ocr_exam_parser_need_branch",
+            },
+            status=status.HTTP_200_OK,
+        )
+
     subjects = _upsert_exam_subjects(request.user, parsed)
+
+    if conversation and conversation.pending_ocr_data:
+        conversation.pending_ocr_data = None
+        conversation.save(update_fields=["pending_ocr_data"])
 
     return Response(
         {
-            "response": "Exam timetable parsed. Please confirm degree, semester and subjects.",
+            "response": "Exam timetable parsed and saved to your subjects! You can now generate your timetable.",
             "tool": "ocr_exam_parser",
             "parsed": parsed,
             "subjects_count": len(subjects),
@@ -323,7 +385,7 @@ def _handle_ocr_parser(request):
     )
 
 
-def _handle_rag_chat(user_message):
+def _handle_rag_chat(user_message, conversation=None):
     if not user_message:
         return None
 
@@ -334,6 +396,16 @@ def _handle_rag_chat(user_message):
         "Use retrieved context when available. "
         f"Context: {context}"
     )
+
+    history_text = ""
+    if conversation:
+        last_messages = conversation.messages.order_by("-timestamp")[:5]
+        last_messages = reversed(list(last_messages))
+        history_text = "\n".join([f"{msg.sender}: {msg.text}" for msg in last_messages])
+
+    if history_text:
+        system_prompt += f"\n\nRecent Conversation History:\n{history_text}"
+
     reply = call_groq_api(user_message, context, system_prompt)
 
     return Response(
@@ -427,8 +499,8 @@ class ChatbotConversationView(APIView):
             "onboarding": lambda: _handle_onboarding(request),
             "generate_timetable": lambda: _handle_timetable_generation(request),
             "adaptive_reschedule": lambda: _handle_adaptive_reschedule(request, force=True),
-            "ocr_exam_parser": lambda: _handle_ocr_parser(request),
-            "rag_chat": lambda: _handle_rag_chat(user_message),
+            "ocr_exam_parser": lambda: _handle_ocr_parser(request, conversation=conversation),
+            "rag_chat": lambda: _handle_rag_chat(user_message, conversation=conversation),
         }
 
         if requested_tool in handlers:
@@ -443,9 +515,13 @@ class ChatbotConversationView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        if conversation and conversation.pending_ocr_data and user_message:
+            response = _handle_stateful_ocr_reply(request, conversation, user_message)
+            return _persist_messages(request, response, user_message, conversation)
+
         for inferred_tool in [
             _handle_onboarding,
-            _handle_ocr_parser,
+            lambda req: _handle_ocr_parser(req, conversation=conversation),
             _handle_timetable_generation,
             _handle_adaptive_reschedule,
         ]:
@@ -454,7 +530,7 @@ class ChatbotConversationView(APIView):
                 return _persist_messages(request, response, user_message, conversation)
 
         if user_message:
-            response = _handle_rag_chat(user_message)
+            response = _handle_rag_chat(user_message, conversation=conversation)
             return _persist_messages(request, response, user_message, conversation)
 
         return Response(
