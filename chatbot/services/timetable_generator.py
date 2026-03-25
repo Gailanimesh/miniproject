@@ -240,7 +240,7 @@ def generate_timetable_for_user(
         return generated_entries
 
     # Primary generation (AI/ML) succeeded
-    TimetableEntry.objects.filter(user=user, start__gte=timezone.now()).delete()
+    TimetableEntry.objects.filter(user=user, done=False).delete()
     TimetableEntry.objects.bulk_create(generated_entries)
     saved_entries = TimetableEntry.objects.filter(user=user).select_related("topic").order_by("start")
     saved_entries = TimetableEntry.objects.filter(user=user).select_related("topic").order_by("start")
