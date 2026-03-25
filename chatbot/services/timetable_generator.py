@@ -45,7 +45,9 @@ def _exam_proximity_bonus(topic, exam_subjects, today):
 
 
 def _build_topic_state(user_profile, topics, exam_subjects):
-    knowledge_level = (getattr(user_profile, "knowledge_level", "") or "").lower()
+    knowledge_level = ""
+    if user_profile:
+        knowledge_level = (getattr(user_profile, "knowledge_level", "") or "").lower()
     knowledge_factor = KNOWLEDGE_FACTORS.get(knowledge_level, 1.0)
     today = timezone.now().date()
 
@@ -212,10 +214,12 @@ def generate_timetable_for_user(
     )
 
     if not generated_entries:
-        fallback_entries = schedule_timetable_for_user(
+        generated_entries = schedule_timetable_for_user(
             user,
             max_chunk_minutes=max_chunk_minutes,
         )
+        # Note: schedule_timetable_for_user already does its own delete and bulk_create.
+        # It returns a queryset of entries for that user.
         if include_metadata:
             metadata = {
                 "algorithm": "greedy_fallback",
@@ -232,11 +236,13 @@ def generate_timetable_for_user(
             }
             if ml_training_meta is not None:
                 metadata["ml_training"] = ml_training_meta
-            return fallback_entries, metadata
-        return fallback_entries
+            return generated_entries, metadata
+        return generated_entries
 
+    # Primary generation (AI/ML) succeeded
     TimetableEntry.objects.filter(user=user, start__gte=timezone.now()).delete()
     TimetableEntry.objects.bulk_create(generated_entries)
+    saved_entries = TimetableEntry.objects.filter(user=user).select_related("topic").order_by("start")
     saved_entries = TimetableEntry.objects.filter(user=user).select_related("topic").order_by("start")
     if include_metadata:
         metadata = {

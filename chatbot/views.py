@@ -199,6 +199,17 @@ def _handle_timetable_generation(request):
         use_model_priority=True,
     )
     entries = list(entries)
+    if not entries:
+        return Response(
+            {
+                "response": "I couldn't generate any new timetable entries. Please ensure you have added your study topics and defined your free time slots first.",
+                "tool": "generate_timetable",
+                "entries": [],
+                "generation": generation_meta,
+            },
+            status=status.HTTP_200_OK,
+        )
+
     entries_payload = [_serialize_timetable_entry(entry) for entry in entries]
     timetable_payload = _build_timetable_payload(
         entries=entries,
@@ -373,6 +384,18 @@ def _handle_ocr_parser(request, conversation=None):
     if conversation and conversation.pending_ocr_data:
         conversation.pending_ocr_data = None
         conversation.save(update_fields=["pending_ocr_data"])
+
+    if not subjects:
+        error_msg = parsed.get("error", "I couldn't find any subjects in this timetable. Please make sure the image is clear and contains subject names and dates.")
+        return Response(
+            {
+                "response": f"OCR extraction completed but no subjects were found. {error_msg}",
+                "tool": "ocr_exam_parser",
+                "parsed": parsed,
+                "subjects_count": 0,
+            },
+            status=status.HTTP_200_OK,
+        )
 
     return Response(
         {

@@ -37,7 +37,7 @@ def schedule_timetable_for_user(user, max_chunk_minutes=60):
             available -= take
             topic.remaining -= take
 
-    TimetableEntry.objects.filter(user=user, start__gte=timezone.now()).delete()
     if entries:
+        TimetableEntry.objects.filter(user=user, start__gte=timezone.now()).delete()
         TimetableEntry.objects.bulk_create(entries)
     return TimetableEntry.objects.filter(user=user).select_related("topic").order_by('start')

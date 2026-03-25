@@ -89,7 +89,7 @@ Expected
 STEP 2: LOGIN (GET TOKENS)
 Request
 - Method: POST
-- URL: {{base_url}}/api/auth/token/
+- URL: {{base_url}}/
 - Headers: Public JSON headers
 Body
 {
