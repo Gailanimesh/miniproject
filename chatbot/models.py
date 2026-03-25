@@ -110,3 +110,12 @@ class UserModelSnapshot(models.Model):
 
     def __str__(self):
         return f"ModelSnapshot<{self.user_id}>"
+
+class StudyNote(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='study_notes')
+    topic_title = models.CharField(max_length=255)
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Note: {self.topic_title} (User: {self.user.id})"

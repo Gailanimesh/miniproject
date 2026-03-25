@@ -106,6 +106,11 @@ Build a conversational productivity backend where users can plan, generate, and 
 - Regenerates upcoming timetable using adaptive chunk size
 - Preserves conversational continuity with `conversation_id`
 
+### 11. Conversational AI Notes (Stack-like)
+- New `StudyNote` model for storing AI-generated notes.
+- Frontend fetches dynamically through `/api/chatbot/notes/` endpoint.
+- Notes are created via the `generate_notes_from_conversation` tool which reads a conversation's history and creates a summarized bulleted note stack.
+
 ---
 
 ## API Endpoints (Current)
@@ -120,14 +125,15 @@ Build a conversational productivity backend where users can plan, generate, and 
 - `GET /api/auth/me/`
 
 ### Timetable
-- `POST /api/timetable/chatbot/`
+- `GET /api/timetable/entries/`
 - `GET /api/timetable/entries/`
 - `PATCH /api/timetable/entries/<id>/`
 
 ### Chatbot
-- `POST /api/chatbot/converse/`
+- `POST /api/chatbot/converse/` (Omni-endpoint for `generate_timetable`, `save_timetable_config`, `generate_notes_from_conversation`, etc.)
 - `GET /api/chatbot/conversations/`
 - `GET /api/chatbot/conversations/<conversation_id>/messages/`
+- `GET /api/chatbot/notes/`
 
 ---
 

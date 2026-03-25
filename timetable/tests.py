@@ -15,7 +15,7 @@ class TimetableValidationTests(APITestCase):
     def setUp(self):
         self.user = User.objects.create_user(email="test@example.com", password="Test1234")
         self.client.force_authenticate(user=self.user)
-        self.url = reverse('timetable-chatbot')
+        self.url = reverse('chatbot-converse')
 
     def test_duplicate_topic(self):
         data = {"topics": [{"name": "Math", "estimated_minutes": 60, "priority": 1}]}

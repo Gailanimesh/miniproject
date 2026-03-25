@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Conversation, Message
+from .models import Conversation, Message, StudyNote
 
 
 class ConversationSerializer(serializers.ModelSerializer):
@@ -14,3 +14,8 @@ class MessageSerializer(serializers.ModelSerializer):
     class Meta:
         model = Message
         fields = ["id", "conversation", "sender", "text", "timestamp"]
+
+class StudyNoteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StudyNote
+        fields = ["id", "topic_title", "content", "created_at"]

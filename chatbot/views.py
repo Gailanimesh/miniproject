@@ -11,12 +11,13 @@ from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from timetable.models import ExamSubject, Topic
+from timetable.models import ExamSubject, Topic, FreeSlot
+from timetable.serializers import TopicSerializer, FreeSlotSerializer
 from users.models import UserProfile
 from users.serializers import UserProfileSerializer
 
-from .models import Conversation, Document, Message, generate_conversation_title
-from .serializers import ConversationSerializer, MessageSerializer
+from .models import Conversation, Document, Message, StudyNote, generate_conversation_title
+from .serializers import ConversationSerializer, MessageSerializer, StudyNoteSerializer
 from .services.feedback_analyzer import adaptive_reschedule_for_user
 from .services.ocr_pipeline import extract_text_from_image, parse_exam_timetable
 from .services.timetable_generator import generate_timetable_for_user
@@ -71,31 +72,35 @@ def call_groq_api(prompt, context, system_prompt):
     return resp_json["choices"][0]["message"]["content"]
 
 
-def _choose_rag_context(user_message):
+def _choose_rag_context(query_text):
     model = _try_get_embedding_model()
     if not model:
         return ""
 
-    query_embedding = model.encode(user_message).astype(np.float32)
-    docs = Document.objects.exclude(embedding=None)
+    try:
+        query_embed = model.encode([query_text])[0]
+    except Exception:
+        return ""
 
-    best_doc = None
-    best_score = -1.0
+    docs = Document.objects.exclude(embedding=None)
+    best_doc_content = ""
+    best_score = -1.0 # Corrected from 0.3-1.0 to -1.0 for proper comparison
 
     for doc in docs:
         try:
             doc_embedding = np.frombuffer(doc.embedding, dtype=np.float32)
-            denom = np.linalg.norm(query_embedding) * np.linalg.norm(doc_embedding)
+            # Calculate cosine similarity
+            denom = np.linalg.norm(query_embed) * np.linalg.norm(doc_embedding)
             if denom == 0:
                 continue
-            score = float(np.dot(query_embedding, doc_embedding) / denom)
-            if score > best_score:
-                best_score = score
-                best_doc = doc
+            sim = np.dot(query_embed, doc_embedding) / denom
+            if sim > best_score:
+                best_score = sim
+                best_doc_content = doc.content
         except Exception:
             continue
 
-    return best_doc.content if best_doc else ""
+    return best_doc_content
 
 
 def _upsert_exam_subjects(user, parsed_data):
@@ -164,6 +169,119 @@ def _build_timetable_payload(entries, strategy=None, generation_meta=None):
 
     return payload
 
+
+def _handle_save_timetable_config(request):
+    user = request.user
+    topics_data = request.data.get('topics', [])
+    free_slots_data = request.data.get('free_slots', [])
+
+    topics_to_create = []
+    for t in topics_data:
+        serializer = TopicSerializer(data=t, context={'request': request})
+        if not serializer.is_valid():
+            return Response({"error": "Invalid topic data", "details": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+        topics_to_create.append(Topic(user=user, **serializer.validated_data))
+    
+    if topics_to_create:
+        Topic.objects.bulk_create(topics_to_create, ignore_conflicts=True)
+
+    slots_to_create = []
+    for fs in free_slots_data:
+        fs_serializer = FreeSlotSerializer(data=fs, context={'request': request})
+        if not fs_serializer.is_valid():
+            return Response({"error": "Invalid free slot data", "details": fs_serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+        slots_to_create.append(FreeSlot(user=user, **fs_serializer.validated_data))
+    
+    if slots_to_create:
+        FreeSlot.objects.bulk_create(slots_to_create)
+
+    entries, generation_meta = generate_timetable_for_user(
+        user,
+        include_metadata=True,
+        use_model_priority=True,
+    )
+    entries = list(entries)
+    
+    entries_payload = [_serialize_timetable_entry(entry) for entry in entries]
+    timetable_payload = _build_timetable_payload(
+        entries=entries,
+        generation_meta=generation_meta,
+    )
+
+    return Response(
+        {
+            "response": "Timetable configuration saved and new plan generated.",
+            "tool": "save_timetable_config",
+            "entries": entries_payload,
+            "timetable": timetable_payload,
+            "generation": generation_meta,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+def _handle_generate_notes_from_conversation(request, conversation):
+    if not conversation:
+        return Response({"error": "A conversation_id is required to extract notes.", "tool": "generate_notes_from_conversation"}, status=status.HTTP_400_BAD_REQUEST)
+    
+    messages = conversation.messages.order_by("timestamp")
+    if not messages.exists():
+        return Response({"error": "Conversation is empty.", "tool": "generate_notes_from_conversation"}, status=status.HTTP_400_BAD_REQUEST)
+    
+    history_text = "\n".join([f"{msg.sender}: {msg.text}" for msg in messages])
+    
+    system_prompt = (
+        "You are an AI study assistant. The user wants to create a saved 'Study Note' from the following conversation history. "
+        "Extract the most important educational or factual key points discussed, and format them as a concise, bulleted markdown list. "
+        "Do not include conversational filler. Just the notes. Start with a short title for the note on the first line like '# Title'."
+    )
+    
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        return Response({"error": "GROQ_API_KEY is not configured.", "tool": "generate_notes_from_conversation"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+    payload = {
+        "model": "llama3-8b-8192",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Conversation:\n{history_text}"},
+        ],
+        "temperature": 0.3,
+        "max_tokens": 512,
+    }
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    
+    try:
+        resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=15)
+        resp.raise_for_status()
+        note_content = resp.json()["choices"][0]["message"]["content"].strip()
+        
+        lines = note_content.split('\n')
+        topic_title = "Extracted Notes"
+        if lines and lines[0].startswith('#'):
+            topic_title = lines[0].replace('#', '').strip()
+            note_content = '\n'.join(lines[1:]).strip()
+            
+        note = StudyNote.objects.create(
+            user=request.user,
+            topic_title=topic_title[:255],
+            content=note_content
+        )
+        
+        serializer = StudyNoteSerializer(note)
+        
+        return Response({
+            "response": "Successfully extracted notes based on our conversation.",
+            "tool": "generate_notes_from_conversation",
+            "note": serializer.data
+        }, status=status.HTTP_201_CREATED)
+        
+    except Exception as e:
+        return Response({"error": f"Failed to generate notes: {str(e)}", "tool": "generate_notes_from_conversation"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 def _handle_onboarding(request):
     if not isinstance(request.data.get("onboarding"), dict):
@@ -243,7 +361,7 @@ def _handle_adaptive_reschedule(request, force=False):
     parsed_entry_id = None
     if entry_id not in (None, ""):
         try:
-            parsed_entry_id = int(entry_id)
+            parsed_entry_id = int(str(entry_id))
         except (TypeError, ValueError):
             return Response(
                 {
@@ -523,6 +641,8 @@ class ChatbotConversationView(APIView):
             "generate_timetable": lambda: _handle_timetable_generation(request),
             "adaptive_reschedule": lambda: _handle_adaptive_reschedule(request, force=True),
             "ocr_exam_parser": lambda: _handle_ocr_parser(request, conversation=conversation),
+            "save_timetable_config": lambda: _handle_save_timetable_config(request),
+            "generate_notes_from_conversation": lambda: _handle_generate_notes_from_conversation(request, conversation=conversation),
             "rag_chat": lambda: _handle_rag_chat(user_message, conversation=conversation),
         }
 
@@ -545,6 +665,7 @@ class ChatbotConversationView(APIView):
         for inferred_tool in [
             _handle_onboarding,
             lambda req: _handle_ocr_parser(req, conversation=conversation),
+            _handle_save_timetable_config if ("topics" in request.data or "free_slots" in request.data) else lambda req: None,
             _handle_timetable_generation,
             _handle_adaptive_reschedule,
         ]:
@@ -588,3 +709,19 @@ class ConversationMessagesView(generics.ListAPIView):
             user=self.request.user,
         )
         return conversation.messages.order_by("timestamp")
+
+
+class StudyNoteListView(generics.ListAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = StudyNoteSerializer
+
+    def get_queryset(self):
+        return StudyNote.objects.filter(user=self.request.user).order_by("-created_at")
+
+
+class StudyNoteDetailView(generics.RetrieveUpdateDestroyAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = StudyNoteSerializer
+
+    def get_queryset(self):
+        return StudyNote.objects.filter(user=self.request.user)

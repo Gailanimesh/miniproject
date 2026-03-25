@@ -43,7 +43,6 @@ AUTH
 - GET  /api/auth/me/
 
 TIMETABLE
-- POST /api/timetable/chatbot/
 - GET  /api/timetable/entries/
 - GET  /api/timetable/entries/<pk>/
 - PATCH /api/timetable/entries/<pk>/
@@ -177,10 +176,11 @@ Important
 STEP 7: SAVE TOPICS + FREE SLOTS AND GENERATE TIMETABLE
 Request
 - Method: POST
-- URL: {{base_url}}/api/timetable/chatbot/
+- URL: {{base_url}}/api/chatbot/converse/
 - Headers: Protected JSON headers
 Body
 {
+  "tool": "save_timetable_config",
   "topics": [
     {
       "name": "Math",
@@ -206,23 +206,24 @@ Body
 }
 Expected
 - Status: 200 OK
-- Response example (array):
-[
-  {
-    "id": 1,
-    "topic": {
+- Response example:
+{
+  "response": "Timetable configuration saved and new plan generated.",
+  "tool": "save_timetable_config",
+  "entries": [
+    {
       "id": 1,
-      "name": "Math",
-      "estimated_minutes": 120,
-      "priority": 2,
-      "completed_minutes": 0
-    },
-    "start": "2026-03-15T10:00:00Z",
-    "end": "2026-03-15T11:00:00Z",
-    "notified": false,
-    "done": false
-  }
-]
+      "topic": "Math",
+      "topic_id": 1,
+      "start": "2026-03-15T10:00:00Z",
+      "end": "2026-03-15T11:00:00Z",
+      "duration_minutes": 60,
+      "done": false
+    }
+  ],
+  "timetable": { ... },
+  "generation": { ... }
+}
 Validation notes
 - Duplicate topic name for same user can return 400.
 - Overlapping free slots can return 400.
@@ -542,13 +543,13 @@ or
   "code": "token_not_valid"
 }
 
-2) Duplicate topic name in /api/timetable/chatbot/
+2) Duplicate topic name in save_timetable_config
 - Status: 400
 {
   "name": ["Topic with this name already exists."]
 }
 
-3) Overlapping free slot in /api/timetable/chatbot/
+3) Overlapping free slot in save_timetable_config
 - Status: 400
 {
   "non_field_errors": ["Free slot overlaps with an existing slot."]

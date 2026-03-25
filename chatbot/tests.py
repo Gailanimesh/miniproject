@@ -1,4 +1,5 @@
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.urls import reverse
@@ -243,3 +244,37 @@ class ChatbotConversationTests(APITestCase):
         self.assertEqual(response.data["tool"], "adaptive_reschedule")
         self.assertIn("generation", response.data)
         self.assertIn("timetable", response.data)
+
+    @patch('chatbot.views.requests.post')
+    @patch('chatbot.views.os.getenv')
+    def test_generate_notes_from_conversation(self, mock_getenv, mock_post):
+        mock_getenv.return_value = "fake-api-key"
+        
+        class MockResponse:
+            def raise_for_status(self): pass
+            def json(self):
+                return {"choices": [{"message": {"content": "# AI Extracted Notes\n- Point 1\n- Point 2"}}]}
+                
+        mock_post.return_value = MockResponse()
+
+        conv = Conversation.objects.create(user=self.user)
+        Message.objects.create(conversation=conv, sender="user", text="Summarize ML")
+        Message.objects.create(conversation=conv, sender="bot", text="ML is machine learning.")
+
+        response = self.client.post(
+            self.url,
+            {"tool": "generate_notes_from_conversation", "conversation_id": conv.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["tool"], "generate_notes_from_conversation")
+        self.assertIn("note", response.data)
+        self.assertEqual(response.data["note"]["topic_title"], "AI Extracted Notes")
+        self.assertIn("- Point 1", response.data["note"]["content"])
+
+        notes_url = reverse("chatbot-notes-list")
+        list_response = self.client.get(notes_url)
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(list_response.data), 1)
+        self.assertEqual(list_response.data[0]["topic_title"], "AI Extracted Notes")

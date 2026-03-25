@@ -11,7 +11,7 @@ class FullApiFlowTests(APITestCase):
         self.refresh_url = reverse('token_refresh')
         self.me_url = reverse('auth-me')
         self.logout_url = reverse('auth-logout')
-        self.timetable_url = reverse('timetable-chatbot')
+        self.timetable_url = reverse('chatbot-converse')
         self.entries_url = reverse('timetable-entries')
         self.chatbot_url = reverse('chatbot-converse')
 

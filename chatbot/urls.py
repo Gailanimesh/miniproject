@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import ChatbotConversationView, ConversationListView, ConversationMessagesView
+from .views import ChatbotConversationView, ConversationListView, ConversationMessagesView, StudyNoteListView, StudyNoteDetailView
 
 urlpatterns = [
     path('api/chatbot/converse/', ChatbotConversationView.as_view(), name='chatbot-converse'),
@@ -9,4 +9,6 @@ urlpatterns = [
         ConversationMessagesView.as_view(),
         name='chatbot-conversation-messages',
     ),
+    path('api/chatbot/notes/', StudyNoteListView.as_view(), name='chatbot-notes-list'),
+    path('api/chatbot/notes/<int:pk>/', StudyNoteDetailView.as_view(), name='chatbot-notes-detail'),
 ]
