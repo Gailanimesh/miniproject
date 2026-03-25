@@ -55,6 +55,10 @@ CHATBOT
 - POST /api/chatbot/converse/
 - GET  /api/chatbot/conversations/
 - GET  /api/chatbot/conversations/<conversation_id>/messages/
+- GET  /api/chatbot/notes/
+- GET  /api/chatbot/notes/<pk>/
+- PATCH /api/chatbot/notes/<pk>/
+- DELETE /api/chatbot/notes/<pk>/
 
 ADMIN
 - /admin/ (Django admin, usually browser/session auth, not JWT API style)
@@ -475,7 +479,40 @@ Expected
   "conversation_id": 4
 }
 
-STEP 20: LIST CHAT CONVERSATIONS
+STEP 20: CHATBOT TOOL = GENERATE NOTES FROM CONVERSATION
+Request
+- Method: POST
+- URL: {{base_url}}/api/chatbot/converse/
+- Headers: Protected JSON headers
+Body
+{
+  "tool": "generate_notes_from_conversation",
+  "conversation_id": {{conversation_id}}
+}
+Expected
+- Status: 201 Created
+- Response example:
+{
+  "response": "Successfully extracted notes based on our conversation.",
+  "tool": "generate_notes_from_conversation",
+  "note": {
+    "id": 1,
+    "topic_title": "Operating Systems Summary",
+    "content": "- Process management involves PCB\n- Context switching has overhead",
+    "created_at": "2026-03-25T15:00:00Z"
+  }
+}
+
+STEP 21: LIST AND MANAGE EXTRACTED NOTES
+Request
+- Method: GET
+- URL: {{base_url}}/api/chatbot/notes/
+- Headers: Protected JSON headers
+Expected
+- Status: 200 OK
+- Response returns an array of extracted notes.
+
+STEP 22: LIST CHAT CONVERSATIONS
 Request
 - Method: GET
 - URL: {{base_url}}/api/chatbot/conversations/
