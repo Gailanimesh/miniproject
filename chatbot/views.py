@@ -1110,16 +1110,64 @@ def _handle_stateful_ocr_reply(request, conversation, user_message):
         
         conversation.pending_ocr_data = None
         conversation.save(update_fields=["pending_ocr_data"])
-        
-        return Response(
-            {
-                "response": f"Exam timetable for {matched_branch} parsed and saved! You can now generate your timetable.",
-                "tool": "ocr_exam_parser",
-                "parsed": parsed,
-                "subjects_count": len(subjects),
-            },
-            status=status.HTTP_200_OK,
-        )
+
+        # ── Check for past exam dates (mirrors _handle_ocr_parser logic) ──
+        from datetime import datetime
+        today = datetime.now().date()
+        past_dates = []
+        for subj in subjects:
+            if hasattr(subj, 'exam_date') and subj.exam_date:
+                if subj.exam_date <= today:
+                    past_dates.append({"name": subj.name, "old_date": str(subj.exam_date)})
+
+        # Store subjects info in conversation so the date-correction state
+        # machine at line ~1570 can pick it up on the next message.
+        conversation.parsed_subjects_for_setup = {
+            "subjects": [
+                {"name": s.name, "date": str(s.exam_date) if s.exam_date else None}
+                for s in subjects
+            ],
+            "past_subjects": past_dates,
+        }
+        conversation.save(update_fields=["parsed_subjects_for_setup"])
+
+        # Build response parts
+        subject_list = "\n".join([f"  - {s.name} ({s.exam_date})" for s in subjects[:5]])
+        if len(subjects) > 5:
+            subject_list += f"\n  - ...and {len(subjects) - 5} more"
+
+        response_parts = [
+            f"Exam timetable for **{matched_branch}** parsed and saved!\n\n"
+            f"**Your Subjects:**\n{subject_list}"
+        ]
+
+        if past_dates:
+            past_list = "\n".join([f"  - {p['name']}: {p['old_date']}" for p in past_dates])
+            response_parts.append(f"**⚠️ Some exam dates are in the past:**\n{past_list}")
+            response_parts.append(
+                "Please enter the correct exam dates for these subjects "
+                "(format: Subject Name - New Date, e.g., 'Compiler Design - 2026-04-15')"
+            )
+            needs_past_date_correction = True
+        else:
+            response_parts.append(
+                "**To generate your study timetable, I need to know your free slots.**\n"
+                "When are you available to study? (e.g., '7pm to 10pm daily')"
+            )
+            needs_past_date_correction = False
+
+        response_data = {
+            "response": "\n\n".join(response_parts),
+            "tool": "ocr_exam_parser",
+            "parsed": parsed,
+            "subjects_count": len(subjects),
+        }
+        if needs_past_date_correction:
+            response_data["needs_past_date_correction"] = True
+        else:
+            response_data["needs_free_slots"] = True
+
+        return Response(response_data, status=status.HTTP_200_OK)
     else:
         return Response(
             {
