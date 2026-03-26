@@ -68,6 +68,12 @@ jobs:
             --settings=backend.test_settings \
             --verbosity=2
 
+      - name: Run backend API tests
+        run: |
+          python manage.py test backend \
+            --settings=backend.test_settings \
+            --verbosity=2
+
       # System check
       - name: Django system check
         run: python manage.py check --settings=backend.test_settings

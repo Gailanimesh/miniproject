@@ -44,13 +44,193 @@ def _try_get_embedding_model():
     return EMBEDDING_MODEL
 
 
+def _normalize_subject_name(name):
+    """
+    Normalize subject name for matching.
+    - Extract subject code if present (e.g., "CST 302" -> "cst302")
+    - Remove special characters
+    - Lowercase everything
+    - Remove common words
+    - Example: "CST 302 Compiler Design" -> "cst302 compiler design"
+    """
+    import re
+    
+    name = str(name).strip()
+    
+    # Extract subject code pattern like "CST 302" or "HUT 300"
+    code_match = re.search(r'([A-Za-z]+)\s*(\d+)', name)
+    code = ""
+    if code_match:
+        code = f"{code_match.group(1).lower()}{code_match.group(2)}"
+        name = name.replace(code_match.group(0), "").strip()
+    
+    # Remove special characters, keep letters and spaces
+    clean = re.sub(r'[^a-zA-Z0-9\s]', ' ', name)
+    clean = re.sub(r'\s+', ' ', clean).strip().lower()
+    
+    # Remove common words
+    skip_words = {'by', 'on', 'before', 'due', 'the', 'a', 'an', 'for', 'to', 'and', 'or', 'exam', 'subject', 'paper'}
+    words = [w for w in clean.split() if w.lower() not in skip_words]
+    
+    # Combine code with cleaned name
+    if code:
+        return f"{code} {' '.join(words)}".strip()
+    return ' '.join(words).strip()
+
+
+def _validate_exam_dates(parsed_subjects):
+    """
+    Validate that all exam dates are in the future.
+    Returns: {
+        'valid': bool,
+        'past_dates': list of subjects with past dates,
+        'future_dates': list of subjects with valid dates
+    }
+    """
+    from django.utils import timezone
+    today = timezone.now().date()
+    
+    past_dates = []
+    future_dates = []
+    
+    for subj in parsed_subjects:
+        date_str = subj.get('date') or subj.get('target_date')
+        if not date_str:
+            continue
+        
+        try:
+            exam_date = datetime.strptime(str(date_str), "%Y-%m-%d").date()
+            if exam_date <= today:
+                past_dates.append({
+                    'name': subj.get('name', 'Unknown'),
+                    'old_date': str(exam_date)
+                })
+            else:
+                future_dates.append({
+                    'name': subj.get('name', 'Unknown'),
+                    'date': str(exam_date)
+                })
+        except ValueError:
+            continue
+    
+    return {
+        'valid': len(past_dates) == 0,
+        'past_dates': past_dates,
+        'future_dates': future_dates
+    }
+
+
+def _find_matching_topic(user, normalized_name):
+    """
+    Find an existing topic that matches the normalized name.
+    Uses STRICT matching by subject code first, then word overlap.
+    """
+    import re
+    existing_topics = Topic.objects.filter(user=user)
+    
+    # Extract code from the input name
+    input_code_match = re.search(r'([a-z]+)(\d+)', normalized_name)
+    
+    # Strategy 1: Match by EXACT subject code (HIGHEST PRIORITY)
+    if input_code_match:
+        input_code = input_code_match.group(1) + input_code_match.group(2)
+        for topic in existing_topics:
+            topic_norm = _normalize_subject_name(topic.name)
+            topic_code_match = re.search(r'([a-z]+)(\d+)', topic_norm)
+            if topic_code_match:
+                topic_code = topic_code_match.group(1) + topic_code_match.group(2)
+                if input_code.lower() == topic_code.lower():
+                    return topic  # Found exact code match
+    
+    # Strategy 2: Match by code PREFIX only (e.g., "cst" matches "cst302")
+    if input_code_match:
+        input_prefix = input_code_match.group(1).lower()
+        for topic in existing_topics:
+            topic_norm = _normalize_subject_name(topic.name)
+            topic_code_match = re.search(r'([a-z]+)(\d+)', topic_norm)
+            if topic_code_match and topic_code_match.group(1).lower() == input_prefix:
+                return topic
+    
+    # Strategy 3: Match by significant words
+    # - If either name has 2+ words, require 2+ matching words
+    # - If the shorter name has only 1 word, require at least 1 match
+    input_words = [w for w in normalized_name.split() if len(w) > 2 and not w.isdigit()]
+    for topic in existing_topics:
+        topic_norm = _normalize_subject_name(topic.name)
+        topic_words = [w for w in topic_norm.split() if len(w) > 2 and not w.isdigit()]
+        common = set(input_words) & set(topic_words)
+        
+        # Need at least 2 matching words if both have 2+ words
+        # Or 1 match if one name is very short (1-2 words)
+        min_words = 2 if (len(input_words) >= 2 and len(topic_words) >= 2) else 1
+        if len(common) >= min_words:
+            return topic
+    
+    return None
+
+
+def _cleanup_duplicate_topics(user):
+    """
+    Clean up duplicate topics for the same user.
+    Merges topics that have the same subject code or significant word overlap.
+    Returns the number of duplicates removed.
+    """
+    import re
+    topics = list(Topic.objects.filter(user=user))
+    removed = 0
+    
+    # Find duplicates
+    to_remove = set()
+    
+    for i, topic1 in enumerate(topics):
+        if topic1.id in to_remove:
+            continue
+        norm1 = _normalize_subject_name(topic1.name)
+        code1 = re.search(r'([a-z]+)(\d+)', norm1)
+        
+        for topic2 in topics[i+1:]:
+            if topic2.id in to_remove:
+                continue
+            norm2 = _normalize_subject_name(topic2.name)
+            code2 = re.search(r'([a-z]+)(\d+)', norm2)
+            
+            # Check if same code
+            if code1 and code2:
+                if code1.group(1).lower() == code2.group(1).lower() and code1.group(2) == code2.group(2):
+                    # Same subject - keep the one with longer name (usually has code)
+                    if len(topic1.name) >= len(topic2.name):
+                        to_remove.add(topic2.id)
+                    else:
+                        to_remove.add(topic1.id)
+                    continue
+            
+            # Check word overlap
+            words1 = set(w for w in norm1.split() if len(w) > 2 and not w.isdigit())
+            words2 = set(w for w in norm2.split() if len(w) > 2 and not w.isdigit())
+            common = words1 & words2
+            if len(common) >= 2:
+                # Duplicate - keep longer name
+                if len(topic1.name) >= len(topic2.name):
+                    to_remove.add(topic2.id)
+                else:
+                    to_remove.add(topic1.id)
+    
+    # Remove duplicates
+    if to_remove:
+        removed = len(to_remove)
+        Topic.objects.filter(id__in=to_remove).delete()
+    
+    return removed
+
+
 def _parse_subject_date_format(user_message, user):
     """
     Parse messages in format: 'Subject - YYYY-MM-DD' or 'Subject: YYYY-MM-DD'
     Also handles natural language: 'Math by April 10', 'Physics on April 15'
     Also handles: 'Subject 2026-03-30'
     
-    Returns dict with 'updated_topics' list and 'latest_date'.
+    NORMALIZES subjects to avoid duplicates:
+    - "compiler design" and "CST 302 Compiler Design" = same subject
     """
     from users.models import UserProfile
     from dateutil import parser as date_parser
@@ -58,6 +238,7 @@ def _parse_subject_date_format(user_message, user):
     
     updated_topics = []
     all_dates = []
+    seen_normalized = {}  # Track normalized names to avoid duplicates
     
     # Pattern 1: "Subject - YYYY-MM-DD" or "Subject: YYYY-MM-DD"
     pattern1 = re.compile(r'([a-zA-Z][a-zA-Z0-9\s]*?)\s*[-:]\s*(\d{4}-\d{2}-\d{2})', re.IGNORECASE)
@@ -68,120 +249,110 @@ def _parse_subject_date_format(user_message, user):
     # Pattern 3: "Subject by April 10" or "Subject on April 15" (natural language)
     pattern3 = re.compile(r'([a-zA-Z][a-zA-Z0-9\s]+?)\s+(?:by|on|before|due)\s+([A-Za-z]+\s+\d{1,2}(?:,?\s*\d{4})?)', re.IGNORECASE)
     
-    matches = pattern1.findall(user_message)
-    
-    if not matches:
-        matches = pattern2.findall(user_message)
-    
-    for subject_name, date_str in matches:
+    def process_subject_date(subject_name, date_str, seen_dict):
+        """Process a subject-date pair and return topic info."""
         subject_name = subject_name.strip()
         date_str = date_str.strip()
         
         try:
             parsed_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-            all_dates.append(parsed_date)
-            
-            # Clean up subject name (remove common words)
-            clean_name = _clean_subject_name(subject_name)
-            
-            # Find or create the topic
-            topic = Topic.objects.filter(user=user, name__iexact=clean_name).first()
-            if not topic:
-                # Try partial match
-                topic = Topic.objects.filter(user=user, name__icontains=clean_name).first()
-            
-            if topic:
-                old_date = topic.target_date
-                topic.target_date = parsed_date
-                topic.save(update_fields=['target_date'])
-                updated_topics.append({
-                    'name': topic.name,
-                    'old_date': str(old_date) if old_date else None,
-                    'new_date': parsed_date.isoformat(),
-                    'is_new': False
-                })
-            else:
-                # Create new topic with target date
-                topic = Topic.objects.create(
-                    user=user,
-                    name=clean_name,
-                    estimated_minutes=120,
-                    priority=1,
-                    target_date=parsed_date
-                )
-                updated_topics.append({
-                    'name': topic.name,
-                    'old_date': None,
-                    'new_date': parsed_date.isoformat(),
-                    'is_new': True
-                })
         except ValueError:
-            continue
+            try:
+                from dateutil import parser as date_parser
+                parsed_date = date_parser.parse(date_str, fuzzy=True).date()
+            except:
+                return None
+        
+        # Normalize the subject name
+        normalized_name = _normalize_subject_name(subject_name)
+        
+        # Skip if we've already processed this normalized name
+        if normalized_name in seen_dict:
+            return None
+        
+        all_dates.append(parsed_date)
+        seen_dict[normalized_name] = True
+        
+        # Try to find existing topic
+        topic = _find_matching_topic(user, normalized_name)
+        
+        if topic:
+            old_date = topic.target_date
+            # If existing topic has shorter name but we have a longer name with code, update it
+            if len(subject_name) > len(topic.name):
+                topic.name = _clean_subject_name(subject_name) or subject_name
+            topic.target_date = parsed_date
+            topic.save(update_fields=['name', 'target_date'])
+            return {
+                'name': topic.name,
+                'normalized': normalized_name,
+                'old_date': str(old_date) if old_date else None,
+                'new_date': parsed_date.isoformat(),
+                'is_new': False,
+                'topic': topic
+            }
+        else:
+            # Prefer the longer name (usually has subject code)
+            display_name = _clean_subject_name(subject_name) or subject_name
+            # If the original name has a subject code, use it
+            if re.search(r'([A-Z]+)\s*(\d+)', subject_name):
+                display_name = subject_name.strip()
+            topic = Topic.objects.create(
+                user=user,
+                name=display_name,
+                estimated_minutes=120,
+                priority=1,
+                target_date=parsed_date
+            )
+            return {
+                'name': display_name,
+                'normalized': normalized_name,
+                'old_date': None,
+                'new_date': parsed_date.isoformat(),
+                'is_new': True,
+                'topic': topic
+            }
+    
+    # Process Pattern 1 and 2 matches
+    matches = pattern1.findall(user_message)
+    if not matches:
+        matches = pattern2.findall(user_message)
+    
+    for subject_name, date_str in matches:
+        result = process_subject_date(subject_name, date_str, seen_normalized)
+        if result:
+            updated_topics.append(result)
     
     # Also handle natural language patterns like "Math by April 10"
     natural_matches = pattern3.findall(user_message)
     for subject_name, date_str in natural_matches:
-        subject_name = subject_name.strip()
-        date_str = date_str.strip()
-        
-        try:
-            # Try to parse the date
-            if dateutil is None:
-                from dateutil import parser as date_parser
-            parsed_date = date_parser.parse(date_str, fuzzy=True).date()
-            all_dates.append(parsed_date)
-            
-            # Clean up subject name
-            clean_name = _clean_subject_name(subject_name)
-            if len(clean_name) < 2:
-                continue
-                
-            # Find or create the topic
-            topic = Topic.objects.filter(user=user, name__iexact=clean_name).first()
-            if not topic:
-                topic = Topic.objects.filter(user=user, name__icontains=clean_name).first()
-            
-            if topic:
-                old_date = topic.target_date
-                topic.target_date = parsed_date
-                topic.save(update_fields=['target_date'])
-                updated_topics.append({
-                    'name': topic.name,
-                    'old_date': str(old_date) if old_date else None,
-                    'new_date': parsed_date.isoformat(),
-                    'is_new': False
-                })
-            else:
-                topic = Topic.objects.create(
-                    user=user,
-                    name=clean_name,
-                    estimated_minutes=120,
-                    priority=1,
-                    target_date=parsed_date
-                )
-                updated_topics.append({
-                    'name': topic.name,
-                    'old_date': None,
-                    'new_date': parsed_date.isoformat(),
-                    'is_new': True
-                })
-        except Exception:
-            continue
+        result = process_subject_date(subject_name, date_str, seen_normalized)
+        if result:
+            updated_topics.append(result)
     
     latest_date = max(all_dates) if all_dates else None
+    
+    # Cleanup duplicate topics
+    duplicates_removed = _cleanup_duplicate_topics(user)
+    
+    # Validate dates - check for past dates
+    validation = _validate_exam_dates(updated_topics)
     
     return {
         'updated_topics': updated_topics,
         'latest_date': latest_date,
-        'has_updates': len(updated_topics) > 0
+        'has_updates': len(updated_topics) > 0,
+        'validation': validation,
+        'duplicates_removed': duplicates_removed
     }
 
 
 def _clean_subject_name(name):
     """Remove common words from subject name."""
-    skip_words = {'by', 'on', 'before', 'due', 'the', 'a', 'an', 'for', 'to', 'and', 'or'}
-    words = name.split()
-    cleaned = [w for w in words if w.lower() not in skip_words]
+    import re
+    skip_words = {'by', 'on', 'before', 'due', 'the', 'a', 'an', 'for', 'to', 'and', 'or', 'exam', 'subject', 'paper'}
+    words = str(name).split()
+    cleaned = [re.sub(r'[^a-zA-Z0-9]', '', w) for w in words if w.lower() not in skip_words]
     return ' '.join(cleaned).strip() if cleaned else name.strip()
 
 
@@ -247,7 +418,14 @@ def _choose_rag_context(query_text):
 
 
 def _upsert_exam_subjects(user, parsed_data):
+    """
+    Create or update exam subjects from parsed data.
+    Uses subject normalization to prevent duplicates.
+    """
+    import re
+    
     created_or_updated = []
+    seen_normalized = {}  # Track normalized names to prevent duplicates
 
     for subject in parsed_data.get("subjects", []):
         name = (subject.get("name") or "").strip()
@@ -260,6 +438,14 @@ def _upsert_exam_subjects(user, parsed_data):
         except ValueError:
             continue
 
+        # Normalize the subject name for duplicate detection
+        normalized_name = _normalize_subject_name(name)
+        
+        # Skip if we've already processed this normalized subject
+        if normalized_name in seen_normalized:
+            continue
+        seen_normalized[normalized_name] = True
+
         difficulty = (subject.get("difficulty") or "medium").lower()
         obj, _ = ExamSubject.objects.update_or_create(
             user=user,
@@ -269,11 +455,25 @@ def _upsert_exam_subjects(user, parsed_data):
         )
         created_or_updated.append(obj)
 
-        Topic.objects.get_or_create(
-            user=user,
-            name=name,
-            defaults={"estimated_minutes": 120, "priority": 2},
-        )
+        # Try to find existing topic using normalization
+        existing_topic = _find_matching_topic(user, normalized_name)
+        
+        if existing_topic:
+            # Update existing topic with longer name if needed
+            if len(name) > len(existing_topic.name):
+                existing_topic.name = name
+            if exam_date:
+                existing_topic.target_date = exam_date
+            existing_topic.save(update_fields=['name', 'target_date'])
+        else:
+            # Create new topic - prefer longer name (usually has code)
+            Topic.objects.create(
+                user=user,
+                name=name,
+                estimated_minutes=120,
+                priority=2,
+                target_date=exam_date,
+            )
 
     return created_or_updated
 
@@ -511,9 +711,20 @@ def _handle_generate_notes_from_conversation(request, conversation):
         return Response({"error": "A conversation history or message is required to extract notes.", "tool": "generate_notes_from_conversation"}, status=status.HTTP_400_BAD_REQUEST)
     
     system_prompt = (
-        "You are an AI study assistant. The user wants to create a saved 'Study Note'. "
-        "Extract the most important educational or factual key points discussed, or answer their specific prompt, and format them as a concise, bulleted markdown list. "
-        "Do not include conversational filler. Just the notes. Start with a short title for the note on the first line like '# Title'."
+        "You are a study note organizer. Create concise, structured notes from the conversation.\n\n"
+        "Rules:\n"
+        "1. Extract ONLY key facts, definitions, formulas, or important concepts\n"
+        "2. Use bullet points (prefer - or •)\n"
+        "3. Keep each point short and actionable\n"
+        "4. Do NOT copy long explanations or AI responses verbatim\n"
+        "5. Do NOT include conversational filler, greetings, or 'Sure, here's...' phrases\n"
+        "6. Summarize concepts in your own words\n"
+        "7. If the conversation is about a topic, extract the core ideas only\n\n"
+        "Output format:\n"
+        "# [Short Topic Title]\n"
+        "- Point 1\n"
+        "- Point 2\n"
+        "- Point 3"
     )
     
     api_key = os.getenv("GROQ_API_KEY")
@@ -1401,7 +1612,27 @@ class ChatbotConversationView(APIView):
                 subject_dates = _parse_subject_date_format(user_message, request.user)
                 
                 if subject_dates.get('has_updates'):
-                    # Successfully parsed subject-date pairs
+                    # Check for past dates
+                    validation = subject_dates.get('validation', {})
+                    
+                    if not validation.get('valid', True):
+                        # PAST DATES DETECTED - Ask for corrected dates
+                        past = validation.get('past_dates', [])
+                        past_list = "\n".join([f"  - {p['name']}: {p['old_date']} (PAST)" for p in past])
+                        
+                        error_msg = (
+                            f"⚠️ I found {len(past)} exam date(s) that are in the past:\n"
+                            f"{past_list}\n\n"
+                            "Please provide corrected dates for these subjects:\n"
+                            "Format: 'Subject Name - YYYY-MM-DD'\n"
+                            "Example: 'Math - 2026-04-15'\n\n"
+                            "Enter the updated dates:"
+                        )
+                        return _persist_messages(request,
+                            Response({"response": error_msg, "tool": "prereq_collect", "past_dates": past}, status=200),
+                            user_message, conversation)
+                    
+                    # Successfully parsed with VALID dates
                     profile, created = UP.objects.get_or_create(user=request.user)
                     
                     # Update profile exam_date to latest date if provided
@@ -1489,7 +1720,27 @@ class ChatbotConversationView(APIView):
                 subject_dates = _parse_subject_date_format(user_message, request.user)
                 
                 if subject_dates.get('has_updates'):
-                    # Successfully parsed subject-date pairs
+                    # Check for past dates FIRST
+                    validation = subject_dates.get('validation', {})
+                    
+                    if not validation.get('valid', True):
+                        # PAST DATES DETECTED - Ask for corrected dates
+                        past = validation.get('past_dates', [])
+                        past_list = "\n".join([f"  - {p['name']}: {p['old_date']} (PAST)" for p in past])
+                        
+                        error_msg = (
+                            f"⚠️ I found {len(past)} exam date(s) that are in the past:\n"
+                            f"{past_list}\n\n"
+                            "Please provide corrected dates:\n"
+                            "Format: 'Subject Name - YYYY-MM-DD'\n"
+                            "Example: 'Math - 2026-04-15'\n\n"
+                            "Enter the updated dates:"
+                        )
+                        return _persist_messages(request,
+                            Response({"response": error_msg, "tool": "prereq_collect", "past_dates": past}, status=200),
+                            user_message, conversation)
+                    
+                    # Valid dates - continue
                     profile, created = UP.objects.get_or_create(user=request.user)
                     latest_date = subject_dates.get('latest_date')
                     

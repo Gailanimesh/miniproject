@@ -125,6 +125,39 @@ class UpsertExamSubjectsTests(TestCase):
         _upsert_exam_subjects(self.user, parsed)
         self.assertEqual(ExamSubject.objects.filter(user=self.user).count(), 0)
 
+    def test_normalized_subject_no_duplicate(self):
+        """Test that 'compiler design' and 'CST 302 Compiler Design' don't create duplicates."""
+        # First, add a subject with code
+        parsed1 = {"subjects": [{"name": "CST 302 Compiler Design", "date": "2026-04-15"}]}
+        _upsert_exam_subjects(self.user, parsed1)
+        self.assertEqual(Topic.objects.filter(user=self.user).count(), 1)
+        
+        # Now add the same subject WITHOUT code - should NOT create duplicate
+        parsed2 = {"subjects": [{"name": "compiler design", "date": "2026-04-15"}]}
+        _upsert_exam_subjects(self.user, parsed2)
+        self.assertEqual(
+            Topic.objects.filter(user=self.user).count(), 1,
+            "Normalized subjects should not create duplicates"
+        )
+        
+        # The topic should have the longer name (with code)
+        topic = Topic.objects.filter(user=self.user).first()
+        self.assertEqual(topic.name, "CST 302 Compiler Design")
+
+    def test_normalized_subject_merge_variants(self):
+        """Test that variations like 'algorithm' and 'CST 306 Algorithm Analysis' merge."""
+        parsed1 = {"subjects": [{"name": "CST 306 Algorithm Analysis and Design", "date": "2026-04-20"}]}
+        _upsert_exam_subjects(self.user, parsed1)
+        
+        # Add variant with just "algorithm"
+        parsed2 = {"subjects": [{"name": "algorithm", "date": "2026-04-20"}]}
+        _upsert_exam_subjects(self.user, parsed2)
+        
+        self.assertEqual(
+            Topic.objects.filter(user=self.user).count(), 1,
+            "Algorithm variants should merge into one topic"
+        )
+
 
 # ---------------------------------------------------------------------------
 # 4. API Integration Tests — POST PDF to /api/chatbot/converse/

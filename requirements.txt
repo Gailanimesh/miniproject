@@ -13,3 +13,5 @@ psycopg[binary]>=3.2.1,<4.0
 dj-database-url>=2.2.0,<3.0
 django-redis>=5.4.0,<6.0
 whitenoise>=6.6.0,<7.0
+pypdf>=6.0.0,<7.0
+python-dateutil>=2.9.0,<3.0
