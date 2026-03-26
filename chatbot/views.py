@@ -754,19 +754,19 @@ def _handle_generate_notes_from_conversation(request, conversation):
         topic_for_notes = _extract_parent_topic(raw_topic)
         system_prompt = (
             f"Generate key study notes on '{topic_for_notes}'.\n\n"
-            "Rules:\n"
-            "1. Each line MUST be a complete explanatory point (not just a heading or title)\n"
-            "2. Include WHY or HOW in explanations\n"
-            "3. One concept per line, 1-2 sentences\n"
-            "4. NO bullet markers, NO headers, NO numbering\n\n"
-            "Example (GOOD):\n"
-            "Binary search works by repeatedly dividing the search interval in half, starting from the middle element\n"
-            "Time complexity is O(log n) because the search space reduces by half with each comparison\n"
-            "Binary search requires the array to be sorted beforehand, or it will produce incorrect results\n\n"
-            "Example (BAD - just headings, don't do this):\n"
-            "Binary Search\n"
-            "Time Complexity\n"
-            "Prerequisites"
+            "STRICT RULES:\n"
+            "1. EVERY line must be a complete sentence explaining a concept\n"
+            "2. NEVER output headings, titles, or subheadings\n"
+            "3. NEVER use bullet points, dashes, asterisks, or numbers at start of lines\n"
+            "4. Each line must explain something (minimum 2 sentences worth of info)\n"
+            "5. Include the 'why' or 'how' in each explanation\n\n"
+            "CORRECT OUTPUT:\n"
+            "Binary search works by repeatedly dividing the search interval in half, starting from the middle element, which makes it very efficient for sorted arrays\n"
+            "The time complexity is O(log n) because the search space is halved with each comparison, so searching a million elements takes only about 20 comparisons\n\n"
+            "WRONG OUTPUT (do not do this):\n"
+            "Binary Search Definition\n"
+            "Time Complexity: O(log n)\n"
+            "- Binary search works by..."
         )
         note_request = f"Generate study notes on {topic_for_notes}"
     else:
@@ -828,10 +828,22 @@ def _handle_generate_notes_from_conversation(request, conversation):
         created_notes = []
         for line in lines:
             line = line.strip()
-            if not line or len(line) < 5:
+            
+            if not line or len(line) < 10:
                 continue
             
-            note_title = line[:80] if len(line) > 80 else line
+            line = line.strip('*#-•·▪▸:')
+            
+            if not line or len(line) < 10:
+                continue
+            
+            if any(line.startswith(prefix) for prefix in ['Key ', 'What ', 'How ', 'Why ', 'When ', 'Where ']) and len(line.split()) < 6:
+                continue
+            
+            if line.endswith(':') or line.endswith(':'):
+                continue
+            
+            note_title = line[:150] if len(line) > 150 else line
             
             note = StudyNote.objects.create(
                 user=request.user,
@@ -1248,9 +1260,8 @@ def _handle_ocr_parser(request, conversation=None):
         response_data["response"] = "\n\n".join(response_parts)
         response_data["needs_past_date_correction"] = True
     else:
-        # Ask for free slots
-        response_parts.append("**To generate your study timetable, I need to know your free slots.**")
-        response_parts.append("When are you available to study? (e.g., '7pm to 10pm daily' or 'Mornings 9am-12pm on weekdays')")
+        # Ask for free slots - use format that triggers free slot extraction
+        response_parts.append("What time are you free to study?\n(e.g., '7pm to 10pm daily' or 'Mornings 9am-12pm on weekdays')")
         response_data["response"] = "\n\n".join(response_parts)
         response_data["needs_free_slots"] = True
     
@@ -1406,10 +1417,29 @@ def _handle_rag_chat(user_message, conversation=None):
 
     context = _choose_rag_context(user_message)
     system_prompt = (
-        "You are an AI timetable planning assistant. "
-        "Prefer concise, actionable study guidance. "
-        "Use retrieved context when available. "
-        f"Context: {context}"
+        "You are a STRICT validation engine + planner. You are NOT just a timetable generator.\n\n"
+        "CORE PRINCIPLE: You are NOT allowed to return a timetable unless it is PERFECT.\n\n"
+        "CONTRACT:\n"
+        "1. Subject Consistency: Each subject appears ONLY once. Merge duplicates.\n"
+        "2. Date Integrity: NEVER modify exam dates.\n"
+        "3. Use ALL time slots: No empty slots allowed.\n"
+        "4. NO BLOCK SCHEDULING: Forbidden A A A. Required: A B C A B C.\n"
+        "5. Round-Robin: Rotate subjects, all appear early.\n"
+        "6. NO CLUSTERING: No same subject consecutive or dominating a day.\n"
+        "7. REVISION MANDATORY: Each subject needs 2 learning + 1 revision (within 2 days before exam).\n"
+        "8. EXAM SAFETY: NEVER schedule on or after exam date.\n"
+        "9. SAME-DAY EXAMS: Split sessions equally.\n\n"
+        "SELF-AUDIT (CRITICAL):\n"
+        "After generating, CHECK:\n"
+        "- Subjects count == input count\n"
+        "- No duplicate subjects\n"
+        "- Dates match input\n"
+        "- No clustering\n"
+        "- All slots used\n"
+        "- Revision exists\n\n"
+        "IF ANY CHECK FAILS: DISCARD and REGENERATE silently.\n"
+        "ONLY return timetable if ALL checks pass.\n\n"
+        f"Study Notes Context: {context}"
     )
 
     history_text = ""
@@ -1576,12 +1606,13 @@ class ChatbotConversationView(APIView):
                     _update_exam_dates(request.user, updated_dates)
                     # Clear the flag since dates are now corrected
                     conversation.parsed_subjects_for_setup = None
-                    conversation.save(update_fields=["parsed_subjects_for_setup"])
+                    conversation.setup_step = "free_slots"
+                    conversation.save(update_fields=["parsed_subjects_for_setup", "setup_step"])
                     
                     # Ask for free slots
                     return _persist_messages(request,
                         Response({
-                            "response": f"Updated! Your exam dates have been corrected.\n\nNow, what are your free study slots? (e.g., '7pm to 10pm daily' or 'Mornings 9am-12pm on weekdays')",
+                            "response": f"Updated! Your exam dates have been corrected.\n\nWhat time are you free to study?\n(e.g., '7pm to 10pm daily' or 'Mornings 9am-12pm on weekdays')",
                             "tool": "prereq_collect",
                             "next_step": "free_slots",
                         }, status=200),
@@ -1662,28 +1693,26 @@ class ChatbotConversationView(APIView):
                 # Else it will fall through to missing prerequisites
             
             # Step A: If bot just asked for days to skip, parse the answer then generate
-            if "any days you'd like to skip" in last_bot_text:
+            if "any days you'd like to skip" in last_bot_text or (conversation and conversation.setup_step == "skip_days"):
+                if conversation:
+                    conversation.setup_step = ""  # Clear the step
+                    conversation.save(update_fields=["setup_step"])
+                
                 skip_days = []
                 day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
                 for d in day_names:
                     if d in user_message.lower():
                         skip_days.append(d.capitalize())
 
-                # FIX: Preserve existing skips if the user says "none" or just "no"
                 if not skip_days and ("none" in user_message.lower() or "no" in user_message.lower()):
                      skip_days = profile.skip_days if profile else []
-                # FIX: If we have new skips, we should probably APPEND them or at least not clear if empty unless explicitly asked
                 elif not skip_days and "none" not in user_message.lower():
-                     # If they didn't say none but didn't list a day, maybe they are confused? 
-                     # For now, let's just keep previous if they didn't list new ones.
                      skip_days = profile.skip_days if profile else []
 
-                # Persist to profile so the generator can see them
                 if profile:
                     profile.skip_days = skip_days
                     profile.save(update_fields=["skip_days"])
 
-                # Build readable planning_type from profile
                 planning_type = "SHORT_TERM" if has_exam_date else "CONTINUOUS"
                 response = _handle_timetable_generation(request, force=True,
                                                         planning_type=planning_type)
@@ -1693,7 +1722,7 @@ class ChatbotConversationView(APIView):
                 return _persist_messages(request, response, user_message, conversation)
 
             # Step B: If bot just asked for the exam date, parse the answer
-            if "what is your exam or target date" in last_bot_text:
+            if "what is your exam or target date" in last_bot_text or (conversation and conversation.setup_step == "exam_dates"):
                 # First, try to parse "Subject - YYYY-MM-DD" format
                 subject_dates = _parse_subject_date_format(user_message, request.user)
                 
@@ -1739,6 +1768,7 @@ class ChatbotConversationView(APIView):
                         "Are there any days you'd like to skip? "
                         "(e.g., 'I'm not free on Sundays', or just say 'none' to continue)"
                     )
+                    conversation.setup_step = "skip_days"
                     return _persist_messages(request,
                         Response({"response": skip_msg, "tool": "prereq_collect"}, status=200),
                         user_message, conversation)
@@ -1762,28 +1792,43 @@ class ChatbotConversationView(APIView):
                         user_message, conversation)
 
             # Step C: If bot asked for free time slots, extract them
-            if "what time are you free to study" in last_bot_text:
+            if "what time are you free to study" in last_bot_text or (conversation and conversation.setup_step == "free_slots"):
                 extract_result = extract_prerequisites_from_chat(request.user, user_message, conversation)
                 added_s = extract_result.get("added_slots", [])
                 if added_s:
-                    # Now ask for exam date (compulsory next step)
-                    exam_q = (
-                        f"I've saved your study window ({', '.join(added_s)}) ✅\n\n"
-                        "What is your exam or target date?\n"
-                        "You can set:\n"
-                        "  - Single date: 'April 15'\n"
-                        "  - Per-subject: 'Math - April 10, Physics - April 15'"
-                    )
-                    return _persist_messages(request,
-                        Response({"response": exam_q, "tool": "prereq_collect"}, status=200),
-                        user_message, conversation)
+                    # Check if subjects already have exam dates (OCR flow)
+                    from timetable.models import ExamSubject
+                    has_exam_subjects = ExamSubject.objects.filter(user=request.user).exists()
+                    
+                    if has_exam_subjects:
+                        # Skip asking for exam date - go straight to skip days
+                        skip_q = (
+                            f"I've saved your study window ({', '.join(added_s)}) ✅\n\n"
+                            "Are there any days you'd like to skip? "
+                            "(e.g., 'I'm not free on Sundays', or just say 'none' to continue)"
+                        )
+                        return _persist_messages(request,
+                            Response({"response": skip_q, "tool": "prereq_collect"}, status=200),
+                            user_message, conversation)
+                    else:
+                        # Ask for exam date (normal onboarding flow)
+                        exam_q = (
+                            f"I've saved your study window ({', '.join(added_s)}) ✅\n\n"
+                            "What is your exam or target date?\n"
+                            "You can set:\n"
+                            "  - Single date: 'April 15'\n"
+                            "  - Per-subject: 'Math - April 10, Physics - April 15'"
+                        )
+                        return _persist_messages(request,
+                            Response({"response": exam_q, "tool": "prereq_collect"}, status=200),
+                            user_message, conversation)
                 else:
                     return _persist_messages(request,
                         Response({"response": "I didn't catch your free time. Please tell me when you're available to study.\nExamples: '8pm to 10pm', '6pm-10pm daily', '2pm-5pm on weekends'.", "tool": "prereq_collect"}, status=200),
                         user_message, conversation)
 
             # Step D: If bot asked for subjects, extract them
-            if "what subjects are you focusing on" in last_bot_text:
+            if "what subjects are you focusing on" in last_bot_text or (conversation and conversation.setup_step == "subjects"):
                 extract_result = extract_prerequisites_from_chat(request.user, user_message, conversation)
                 added_t = extract_result.get("added_topics", [])
                 if added_t:
@@ -1889,6 +1934,8 @@ class ChatbotConversationView(APIView):
 
                 # Missing slots → ask for free time
                 if has_topics and not has_slots:
+                    conversation.setup_step = "free_slots"
+                    conversation.save(update_fields=["setup_step"])
                     return _persist_messages(request,
                         Response({"response": f"Topics saved 📚 Now, what time are you free to study each day? (e.g., '8pm to 10pm')", "tool": "prereq_collect"}, status=200),
                         user_message, conversation)
