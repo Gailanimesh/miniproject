@@ -115,9 +115,9 @@ class UserModelSnapshot(models.Model):
 
 class StudyNote(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='study_notes')
+    parent_topic = models.CharField(max_length=255, default='', blank=True)
     topic_title = models.CharField(max_length=255)
-    content = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"Note: {self.topic_title} (User: {self.user.id})"
+        return f"Note: {self.parent_topic} (User: {self.user.id})"

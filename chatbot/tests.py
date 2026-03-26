@@ -252,10 +252,18 @@ class ChatbotConversationTests(APITestCase):
     def test_generate_notes_from_conversation(self, mock_getenv, mock_post):
         mock_getenv.return_value = "fake-api-key"
         
+        call_count = [0]
+        
+        def mock_json():
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return {"choices": [{"message": {"content": "Point 1 about machine learning\nPoint 2 about neural networks\nPoint 3 about deep learning"}}]}
+            return {"choices": [{"message": {"content": "Machine Learning"}}]}
+        
         class MockResponse:
             def raise_for_status(self): pass
             def json(self):
-                return {"choices": [{"message": {"content": "# AI Extracted Notes\n- Point 1\n- Point 2"}}]}
+                return mock_json()
                 
         mock_post.return_value = MockResponse()
 
@@ -271,12 +279,14 @@ class ChatbotConversationTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["tool"], "generate_notes_from_conversation")
-        self.assertIn("note", response.data)
-        self.assertEqual(response.data["note"]["topic_title"], "AI Extracted Notes")
-        self.assertIn("- Point 1", response.data["note"]["content"])
+        self.assertIn("notes", response.data)
+        self.assertEqual(response.data["notes_count"], 3, f"Expected 3 notes but got {response.data.get('notes_count')}. Notes: {response.data.get('notes', [])}")
+        self.assertEqual(len(response.data["notes"]), 3)
+        self.assertEqual(response.data["parent_topic"], "Machine Learning")
 
         notes_url = reverse("chatbot-notes-list")
         list_response = self.client.get(notes_url)
         self.assertEqual(list_response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(list_response.data), 1)
-        self.assertEqual(list_response.data[0]["topic_title"], "AI Extracted Notes")
+        self.assertEqual(len(list_response.data), 3)
+        self.assertEqual(list_response.data[0]["parent_topic"], "Machine Learning")
+        self.assertIn("Point", list_response.data[0]["topic_title"])

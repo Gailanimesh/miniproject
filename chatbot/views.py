@@ -386,6 +386,50 @@ def call_groq_api(prompt, context, system_prompt):
     return resp_json["choices"][0]["message"]["content"]
 
 
+def _extract_parent_topic(user_message):
+    """
+    Extract a clean, short parent topic from user message.
+    Examples:
+    - "create a note for ds binary search" -> "DS - Binary Search"
+    - "summarize operating system scheduling" -> "OS - Scheduling"
+    - "explain machine learning basics" -> "Machine Learning"
+    """
+    if not user_message:
+        return "Study Notes"
+    
+    topic_prompt = (
+        "Extract the main topic from this request. Return ONLY the topic name.\n"
+        "Rules:\n"
+        "1. Keep it short (2-5 words max)\n"
+        "2. Use proper capitalization\n"
+        "3. If it's a subject + subtopic, format as 'Subject - Subtopic'\n"
+        "4. Remove filler words like 'create notes for', 'explain', 'summarize'\n"
+        "5. Examples:\n"
+        "   - 'create a note for ds binary search' -> 'DS - Binary Search'\n"
+        "   - 'summarize operating system' -> 'Operating System'\n"
+        "   - 'explain python lists' -> 'Python - Lists'\n\n"
+        f"Request: {user_message}\n\n"
+        "Topic:"
+    )
+    
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        return user_message.strip()[:50] if user_message else "Study Notes"
+    
+    try:
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={"model": "llama-3.1-8b-instant", "messages": [{"role": "user", "content": topic_prompt}], "max_tokens": 20, "temperature": 0.3},
+            timeout=10
+        )
+        resp.raise_for_status()
+        topic = resp.json()["choices"][0]["message"]["content"].strip()
+        return topic[:80] if topic else user_message.strip()[:50]
+    except Exception:
+        return user_message.strip()[:50] if user_message else "Study Notes"
+
+
 def _choose_rag_context(query_text):
     model = _try_get_embedding_model()
     if not model:
@@ -711,20 +755,18 @@ def _handle_generate_notes_from_conversation(request, conversation):
         return Response({"error": "A conversation history or message is required to extract notes.", "tool": "generate_notes_from_conversation"}, status=status.HTTP_400_BAD_REQUEST)
     
     system_prompt = (
-        "You are a study note organizer. Create concise, structured notes from the conversation.\n\n"
+        "You are a study note organizer. Extract key points from the conversation.\n\n"
         "Rules:\n"
-        "1. Extract ONLY key facts, definitions, formulas, or important concepts\n"
-        "2. Use bullet points (prefer - or •)\n"
-        "3. Keep each point short and actionable\n"
-        "4. Do NOT copy long explanations or AI responses verbatim\n"
-        "5. Do NOT include conversational filler, greetings, or 'Sure, here's...' phrases\n"
-        "6. Summarize concepts in your own words\n"
-        "7. If the conversation is about a topic, extract the core ideas only\n\n"
-        "Output format:\n"
-        "# [Short Topic Title]\n"
-        "- Point 1\n"
-        "- Point 2\n"
-        "- Point 3"
+        "1. Extract ONLY one key fact/definition/concept per line\n"
+        "2. Each line should be a standalone, complete point\n"
+        "3. Keep each point short (1-2 sentences max)\n"
+        "4. Do NOT copy long explanations verbatim\n"
+        "5. Do NOT include greetings or filler phrases\n"
+        "6. Summarize in your own words\n\n"
+        "Output format - one point per line, no headers or bullet markers:\n"
+        "Point about definition\n"
+        "Point about concept\n"
+        "Formula or key fact"
     )
     
     api_key = os.getenv("GROQ_API_KEY")
@@ -752,23 +794,45 @@ def _handle_generate_notes_from_conversation(request, conversation):
         note_content = resp.json()["choices"][0]["message"]["content"].strip()
         
         lines = note_content.split('\n')
-        topic_title = "Extracted Notes"
-        if lines and lines[0].startswith('#'):
-            topic_title = lines[0].replace('#', '').strip()
-            note_content = '\n'.join(lines[1:]).strip()
-            
-        note = StudyNote.objects.create(
-            user=request.user,
-            topic_title=topic_title[:255],
-            content=note_content
-        )
         
-        serializer = StudyNoteSerializer(note)
+        raw_topic = user_message.strip() if user_message else ""
+        if not raw_topic and conversation:
+            first_user_msg = conversation.messages.filter(sender="user").order_by("timestamp").first()
+            if first_user_msg:
+                raw_topic = first_user_msg.text.strip()
+        
+        parent_topic = _extract_parent_topic(raw_topic)
+        
+        created_notes = []
+        for line in lines:
+            line = line.strip()
+            if not line or len(line) < 5:
+                continue
+            
+            note_title = line[:80] if len(line) > 80 else line
+            
+            note = StudyNote.objects.create(
+                user=request.user,
+                parent_topic=parent_topic,
+                topic_title=note_title
+            )
+            created_notes.append(note)
+        
+        if not created_notes:
+            return Response({
+                "response": "I couldn't extract any specific points. Try asking about a specific topic.",
+                "tool": "generate_notes_from_conversation",
+                "notes_count": 0
+            }, status=status.HTTP_200_OK)
+        
+        serializer = StudyNoteSerializer(created_notes, many=True)
         
         return Response({
-            "response": "Successfully extracted notes based on our conversation.",
+            "response": f"Created {len(created_notes)} notes under '{parent_topic}'.",
             "tool": "generate_notes_from_conversation",
-            "note": serializer.data
+            "notes": serializer.data,
+            "notes_count": len(created_notes),
+            "parent_topic": parent_topic
         }, status=status.HTTP_201_CREATED)
         
     except requests.exceptions.HTTPError as e:

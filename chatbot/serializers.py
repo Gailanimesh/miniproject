@@ -18,4 +18,4 @@ class MessageSerializer(serializers.ModelSerializer):
 class StudyNoteSerializer(serializers.ModelSerializer):
     class Meta:
         model = StudyNote
-        fields = ["id", "topic_title", "content", "created_at"]
+        fields = ["id", "parent_topic", "topic_title", "created_at"]
