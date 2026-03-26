@@ -490,6 +490,53 @@
               "path": ["api", "chatbot", "conversations", "{{conversationId}}", "messages", ""]
             }
           }
+        }
+      ]
+    },
+    {
+      "name": "8b. Study Notes",
+      "item": [
+        {
+          "name": "Generate Notes from Conversation",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"tool\": \"generate_notes_from_conversation\",\n    \"conversation_id\": \"{{conversationId}}\",\n    \"message\": \"notes on Compiler Design\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chatbot/converse/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chatbot", "converse", ""]
+            }
+          }
+        },
+        {
+          "name": "Generate Notes (create note for this)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"tool\": \"generate_notes_from_conversation\",\n    \"conversation_id\": \"{{conversationId}}\",\n    \"message\": \"create note\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chatbot/converse/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chatbot", "converse", ""]
+            }
+          }
         },
         {
           "name": "Get Study Notes",
@@ -500,6 +547,24 @@
               "raw": "{{baseUrl}}/api/chatbot/notes/",
               "host": ["{{baseUrl}}"],
               "path": ["api", "chatbot", "notes", ""]
+            }
+          }
+        },
+        {
+          "name": "Get Notes by Parent Topic",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/chatbot/notes/?parent_topic=Compiler Design",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chatbot", "notes", ""],
+              "query": [
+                {
+                  "key": "parent_topic",
+                  "value": "Compiler Design"
+                }
+              ]
             }
           }
         }

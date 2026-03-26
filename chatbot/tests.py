@@ -252,23 +252,15 @@ class ChatbotConversationTests(APITestCase):
     def test_generate_notes_from_conversation(self, mock_getenv, mock_post):
         mock_getenv.return_value = "fake-api-key"
         
-        call_count = [0]
-        
-        def mock_json():
-            call_count[0] += 1
-            if call_count[0] == 1:
-                return {"choices": [{"message": {"content": "Point 1 about machine learning\nPoint 2 about neural networks\nPoint 3 about deep learning"}}]}
-            return {"choices": [{"message": {"content": "Machine Learning"}}]}
-        
         class MockResponse:
             def raise_for_status(self): pass
             def json(self):
-                return mock_json()
+                return {"choices": [{"message": {"content": "Point 1 about machine learning\nPoint 2 about neural networks\nPoint 3 about deep learning"}}]}
                 
         mock_post.return_value = MockResponse()
 
         conv = Conversation.objects.create(user=self.user)
-        Message.objects.create(conversation=conv, sender="user", text="Summarize ML")
+        Message.objects.create(conversation=conv, sender="user", text="notes on machine learning")
         Message.objects.create(conversation=conv, sender="bot", text="ML is machine learning.")
 
         response = self.client.post(
@@ -280,13 +272,13 @@ class ChatbotConversationTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["tool"], "generate_notes_from_conversation")
         self.assertIn("notes", response.data)
-        self.assertEqual(response.data["notes_count"], 3, f"Expected 3 notes but got {response.data.get('notes_count')}. Notes: {response.data.get('notes', [])}")
+        self.assertEqual(response.data["notes_count"], 3)
         self.assertEqual(len(response.data["notes"]), 3)
-        self.assertEqual(response.data["parent_topic"], "Machine Learning")
+        self.assertEqual(response.data["parent_topic"], "machine learning")
 
         notes_url = reverse("chatbot-notes-list")
         list_response = self.client.get(notes_url)
         self.assertEqual(list_response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(list_response.data), 3)
-        self.assertEqual(list_response.data[0]["parent_topic"], "Machine Learning")
+        self.assertEqual(list_response.data[0]["parent_topic"], "machine learning")
         self.assertIn("Point", list_response.data[0]["topic_title"])

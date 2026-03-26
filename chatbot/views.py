@@ -388,46 +388,33 @@ def call_groq_api(prompt, context, system_prompt):
 
 def _extract_parent_topic(user_message):
     """
-    Extract a clean, short parent topic from user message.
+    Extract a clean parent topic from user message.
     Examples:
-    - "create a note for ds binary search" -> "DS - Binary Search"
-    - "summarize operating system scheduling" -> "OS - Scheduling"
-    - "explain machine learning basics" -> "Machine Learning"
+    - "notes on computer graphics" -> "Computer Graphics"
+    - "create notes for this" -> uses conversation context
     """
     if not user_message:
         return "Study Notes"
     
-    topic_prompt = (
-        "Extract the main topic from this request. Return ONLY the topic name.\n"
-        "Rules:\n"
-        "1. Keep it short (2-5 words max)\n"
-        "2. Use proper capitalization\n"
-        "3. If it's a subject + subtopic, format as 'Subject - Subtopic'\n"
-        "4. Remove filler words like 'create notes for', 'explain', 'summarize'\n"
-        "5. Examples:\n"
-        "   - 'create a note for ds binary search' -> 'DS - Binary Search'\n"
-        "   - 'summarize operating system' -> 'Operating System'\n"
-        "   - 'explain python lists' -> 'Python - Lists'\n\n"
-        f"Request: {user_message}\n\n"
-        "Topic:"
-    )
+    topic = user_message.strip()
     
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        return user_message.strip()[:50] if user_message else "Study Notes"
+    words_to_remove = [
+        "create notes", "generate notes", "make notes", "create a note", "create note",
+        "notes on", "note on", "notes about", "note about", "on ", "about ",
+        "summarize", "summary of", "summary for",
+        "explain", "explain about",
+        "for this", "of this",
+    ]
     
-    try:
-        resp = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={"model": "llama-3.1-8b-instant", "messages": [{"role": "user", "content": topic_prompt}], "max_tokens": 20, "temperature": 0.3},
-            timeout=10
-        )
-        resp.raise_for_status()
-        topic = resp.json()["choices"][0]["message"]["content"].strip()
-        return topic[:80] if topic else user_message.strip()[:50]
-    except Exception:
-        return user_message.strip()[:50] if user_message else "Study Notes"
+    for phrase in words_to_remove:
+        topic = topic.replace(phrase, "")
+    
+    topic = topic.strip()
+    
+    if len(topic) < 2:
+        return "Study Notes"
+    
+    return topic[:50]
 
 
 def _choose_rag_context(query_text):
@@ -754,20 +741,61 @@ def _handle_generate_notes_from_conversation(request, conversation):
     if not history_text.strip():
         return Response({"error": "A conversation history or message is required to extract notes.", "tool": "generate_notes_from_conversation"}, status=status.HTTP_400_BAD_REQUEST)
     
-    system_prompt = (
-        "You are a study note organizer. Extract key points from the conversation.\n\n"
-        "Rules:\n"
-        "1. Extract ONLY one key fact/definition/concept per line\n"
-        "2. Each line should be a standalone, complete point\n"
-        "3. Keep each point short (1-2 sentences max)\n"
-        "4. Do NOT copy long explanations verbatim\n"
-        "5. Do NOT include greetings or filler phrases\n"
-        "6. Summarize in your own words\n\n"
-        "Output format - one point per line, no headers or bullet markers:\n"
-        "Point about definition\n"
-        "Point about concept\n"
-        "Formula or key fact"
-    )
+    raw_topic = user_message.strip() if user_message else ""
+    generic_phrases_exact = [
+        "create note", "create notes", "make notes", "generate notes", "save note", "save notes",
+        "for this", "of this", "this", "summarize this", "create notes of this",
+        "note this", "notes this", "hi", "hello", "hey", "okay", "ok", "yes", "no", "sure", "thanks", "thank you",
+        "my name is", "i am", "i'm"
+    ]
+    generic_prefixes = ["create ", "make ", "generate ", "save ", "hi", "hello", "hey", "my name", "i am", "i'm"]
+    
+    if raw_topic and raw_topic.lower().strip() not in generic_phrases_exact and not any(raw_topic.lower().startswith(p) for p in generic_prefixes):
+        topic_for_notes = _extract_parent_topic(raw_topic)
+        system_prompt = (
+            f"Generate key study notes on '{topic_for_notes}'.\n\n"
+            "Rules:\n"
+            "1. Each line MUST be a complete explanatory point (not just a heading or title)\n"
+            "2. Include WHY or HOW in explanations\n"
+            "3. One concept per line, 1-2 sentences\n"
+            "4. NO bullet markers, NO headers, NO numbering\n\n"
+            "Example (GOOD):\n"
+            "Binary search works by repeatedly dividing the search interval in half, starting from the middle element\n"
+            "Time complexity is O(log n) because the search space reduces by half with each comparison\n"
+            "Binary search requires the array to be sorted beforehand, or it will produce incorrect results\n\n"
+            "Example (BAD - just headings, don't do this):\n"
+            "Binary Search\n"
+            "Time Complexity\n"
+            "Prerequisites"
+        )
+        note_request = f"Generate study notes on {topic_for_notes}"
+    else:
+        topic_for_notes = None
+        if conversation:
+            user_msgs = list(conversation.messages.filter(sender="user").order_by("timestamp").values_list('text', flat=True))
+            for msg in reversed(user_msgs):
+                msg_lower = msg.lower().strip()
+                if msg_lower not in generic_phrases_exact and len(msg_lower) > 5:
+                    if not any(msg_lower.startswith(p) for p in generic_prefixes):
+                        raw_topic = msg.strip()
+                        topic_for_notes = _extract_parent_topic(raw_topic)
+                        break
+        
+        if not topic_for_notes:
+            topic_for_notes = "Study Notes"
+        
+        system_prompt = (
+            "Extract key study points from this conversation.\n\n"
+            "Rules:\n"
+            "1. Each line MUST be a complete explanatory point (not just a heading)\n"
+            "2. Include WHY or HOW in explanations\n"
+            "3. One concept per line, 1-2 sentences\n"
+            "4. NO bullet markers, NO headers, NO numbering\n\n"
+            "Example (GOOD):\n"
+            "Binary search works by repeatedly dividing the search interval in half, starting from the middle element\n"
+            "Time complexity is O(log n) because the search space reduces by half with each comparison"
+        )
+        note_request = f"Conversation:\n{history_text}"
     
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
@@ -777,7 +805,7 @@ def _handle_generate_notes_from_conversation(request, conversation):
         "model": "llama-3.1-8b-instant",
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Conversation:\n{history_text}"},
+            {"role": "user", "content": note_request},
         ],
         "temperature": 0.3,
         "max_tokens": 512,
@@ -795,13 +823,7 @@ def _handle_generate_notes_from_conversation(request, conversation):
         
         lines = note_content.split('\n')
         
-        raw_topic = user_message.strip() if user_message else ""
-        if not raw_topic and conversation:
-            first_user_msg = conversation.messages.filter(sender="user").order_by("timestamp").first()
-            if first_user_msg:
-                raw_topic = first_user_msg.text.strip()
-        
-        parent_topic = _extract_parent_topic(raw_topic)
+        parent_topic = topic_for_notes
         
         created_notes = []
         for line in lines:
