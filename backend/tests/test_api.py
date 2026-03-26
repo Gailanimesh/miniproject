@@ -1,3 +1,4 @@
+from datetime import date, timedelta
 from django.urls import reverse
 from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
@@ -14,6 +15,7 @@ class FullApiFlowTests(APITestCase):
         self.timetable_url = reverse('chatbot-converse')
         self.entries_url = reverse('timetable-entries')
         self.chatbot_url = reverse('chatbot-converse')
+        self.profile_url = reverse('profile')
 
         self.user_data = {
             "email": "testuser@example.com",
@@ -41,6 +43,11 @@ class FullApiFlowTests(APITestCase):
         resp = self.client.get(self.me_url)
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data.get("email"), self.user_data["email"])
+
+        # Set up user profile with exam date first
+        future_exam_date = (date.today() + timedelta(days=30)).isoformat()
+        resp = self.client.patch(self.profile_url, {"exam_date": future_exam_date}, format='json')
+        self.assertEqual(resp.status_code, 200)
 
         # Timetable: Save topics and free slots
         data = {

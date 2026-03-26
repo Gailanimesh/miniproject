@@ -25,7 +25,7 @@ def generate_conversation_title(user_message: str) -> str:
         "that summarises the topic. No punctuation, no quotes, no explanation."
     )
     payload = {
-        "model": "llama3-8b-8192",
+        "model": "llama-3.1-8b-instant",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
@@ -56,6 +56,7 @@ class Conversation(models.Model):
     title = models.CharField(max_length=255, blank=True, default='')
     started_at = models.DateTimeField(auto_now_add=True)
     pending_ocr_data = models.JSONField(null=True, blank=True)
+    parsed_subjects_for_setup = models.JSONField(null=True, blank=True)
 
     def __str__(self):
         if self.title:
@@ -69,6 +70,7 @@ class Message(models.Model):
     sender = models.CharField(max_length=10)  # 'user' or 'bot'
     text = models.TextField()
     timestamp = models.DateTimeField(auto_now_add=True)
+    payload = models.JSONField(null=True, blank=True, default=dict)
 
     def __str__(self):
         preview = self.text[:50].replace('\n', ' ')

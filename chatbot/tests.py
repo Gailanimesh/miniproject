@@ -49,6 +49,7 @@ class ChatbotConversationTests(APITestCase):
             goal_type="Semester Exam",
             knowledge_level="intermediate",
             daily_free_hours=2,
+            exam_date=timezone.now().date() + timedelta(days=7),
         )
         Topic.objects.create(
             user=self.user,
@@ -80,7 +81,7 @@ class ChatbotConversationTests(APITestCase):
     def test_rag_chat_fallback(self):
         response = self.client.post(
             self.url,
-            {"message": "How do I stay consistent with study?"},
+            {"message": "Give me some generic advice on how to improve my productivity."},
             format="json",
         )
 
@@ -127,6 +128,7 @@ class ChatbotConversationTests(APITestCase):
             goal_type="Semester Exam",
             knowledge_level="intermediate",
             daily_free_hours=3,
+            exam_date=timezone.now().date() + timedelta(days=7),
         )
         topic = Topic.objects.create(
             user=self.user,

@@ -17,32 +17,33 @@ jobs:
         python-version: ["3.11"]
 
     env:
-      # Use sqlite via test_settings — no real DB or Redis needed in CI
+      # Use sqlite via test_settings - no real DB or Redis needed in CI
       DJANGO_SECRET_KEY: ci-unsafe-secret-key-only
       DJANGO_DEBUG: "True"
-      GROQ_API_KEY: ""          # Empty — tests use fallback, no real Groq calls
+      GROQ_API_KEY: ""          # Empty - tests use fallback, no real Groq calls
+      GEMINI_API_KEY: ""        # Empty - tests mock OCR
 
     steps:
-      # ── Checkout ────────────────────────────────────────────────────────────
+      # Checkout
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── Python setup ────────────────────────────────────────────────────────
+      # Python setup
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      # ── Dependencies ────────────────────────────────────────────────────────
+      # Dependencies
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
-      # ── Database migrations ──────────────────────────────────────────────────
+      # Database migrations
       - name: Run migrations (SQLite test DB)
         run: python manage.py migrate --settings=backend.test_settings
 
-      # ── Test suites ──────────────────────────────────────────────────────────
+      # Test suites
       - name: Run chatbot tests (core + OCR pipeline)
         run: |
           python manage.py test chatbot \
@@ -61,12 +62,41 @@ jobs:
             --settings=backend.test_settings \
             --verbosity=2
 
-      - name: Run backend API tests
+      - name: Run E2E workflow tests
         run: |
-          python manage.py test backend.tests \
+          python manage.py test test_e2e \
             --settings=backend.test_settings \
             --verbosity=2
 
-      # ── System check (catches model/config errors before deploy) ────────────
+      # System check
       - name: Django system check
         run: python manage.py check --settings=backend.test_settings
+
+      # Lint check (optional)
+      - name: Install lint tools
+        run: pip install flake8
+
+      - name: Run flake8
+        run: |
+          # Exclude migrations and test files
+          flake8 --exclude=migrations,test*.py --max-line-length=120 .
+
+  lint:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install flake8
+
+      - name: Run flake8
+        run: |
+          flake8 --exclude=migrations,test*.py --max-line-length=120 .

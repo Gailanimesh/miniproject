@@ -56,6 +56,7 @@ class UserProfile(models.Model):
 	occupation = models.CharField(max_length=100, blank=True)
 	preferred_study_time = models.CharField(max_length=50, blank=True)
 	learning_style = models.CharField(max_length=50, blank=True)
+	skip_days = models.JSONField(default=list, blank=True)  # e.g. ["Sunday", "Wednesday"]
 	created_at = models.DateTimeField(auto_now_add=True)
 	updated_at = models.DateTimeField(auto_now=True)
 

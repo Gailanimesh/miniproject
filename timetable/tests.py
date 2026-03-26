@@ -8,6 +8,7 @@ from rest_framework.test import APITestCase
 
 from timetable.models import CompletionCheck, FreeSlot, TimetableEntry, Topic, UserNotification
 from timetable.notification_service import process_notification_pipeline
+from users.models import UserProfile
 
 User = get_user_model()
 
@@ -26,8 +27,9 @@ class TimetableValidationTests(APITestCase):
         self.assertIn("Topic with this name already exists.", str(resp2.data))
 
     def test_overlapping_free_slot(self):
-        slot1 = {"start": "2026-03-07T10:00:00Z", "end": "2026-03-07T12:00:00Z"}
-        slot2 = {"start": "2026-03-07T11:00:00Z", "end": "2026-03-07T13:00:00Z"}
+        base = timezone.now() + timedelta(days=30)
+        slot1 = {"start": base.isoformat(), "end": (base + timedelta(hours=2)).isoformat()}
+        slot2 = {"start": (base + timedelta(hours=1)).isoformat(), "end": (base + timedelta(hours=3)).isoformat()}
         data1 = {"free_slots": [slot1]}
         data2 = {"free_slots": [slot2]}
         resp1 = self.client.post(self.url, data1, format='json')
@@ -37,7 +39,8 @@ class TimetableValidationTests(APITestCase):
         self.assertIn("Free slot overlaps with an existing slot.", str(resp2.data))
 
     def test_invalid_slot_duration(self):
-        slot = {"start": "2026-03-07T14:00:00Z", "end": "2026-03-07T13:00:00Z"}
+        base = timezone.now() + timedelta(days=30)
+        slot = {"start": (base + timedelta(hours=2)).isoformat(), "end": (base + timedelta(hours=1)).isoformat()}
         data = {"free_slots": [slot]}
         resp = self.client.post(self.url, data, format='json')
         self.assertEqual(resp.status_code, 400)
@@ -54,6 +57,11 @@ class NotificationAndCompletionFlowTests(APITestCase):
             estimated_minutes=120,
             priority=2,
         )
+
+    def tearDown(self):
+        CompletionCheck.objects.all().delete()
+        UserNotification.objects.all().delete()
+        super().tearDown()
 
     def test_notification_pipeline_creates_pre_and_completion_notifications(self):
         now = timezone.now()
@@ -110,6 +118,10 @@ class NotificationAndCompletionFlowTests(APITestCase):
         self.assertGreater(self.topic.completed_minutes, 0)
 
     def test_completion_response_false_triggers_reschedule(self):
+        UserProfile.objects.create(
+            user=self.user,
+            exam_date=timezone.now().date() + timedelta(days=7),
+        )
         now = timezone.now()
         entry = TimetableEntry.objects.create(
             user=self.user,

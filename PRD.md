@@ -9,12 +9,13 @@ Build a conversational productivity backend where users can plan, generate, and 
 ## Current Backend Stack
 - Django + Django REST Framework
 - JWT authentication (SimpleJWT)
-- SQLite (current environment)
+- PostgreSQL (Railway deployment)
+- SQLite (local development)
 - SentenceTransformers + document embedding retrieval for RAG-style responses
-- OCR parsing pipeline with graceful fallback when OCR libraries are unavailable
+- OCR parsing pipeline with Gemini API for image/text extraction
+- ML-based timetable prioritization with PyTorch
 
 ---
-
 ## Implemented Scope (As of Now)
 
 ### 1. Authentication and User Core
@@ -29,90 +30,101 @@ Build a conversational productivity backend where users can plan, generate, and 
 - TimetableEntry model with completion and notification flags
 - Reminder model scaffolded in DB
 - Greedy scheduler (`schedule_timetable_for_user`) for baseline planning
+- New `curriculum` JSONField in `Topic` model for AI-generated chapter storage.
+- `curriculum` JSONField in `Topic` model for AI-generated chapter storage
 
-### 3. Conversational Chatbot Endpoint
+### 3. Gated Conversational Flow (Implemented)
+- Transitioned from auto-infer to a state-driven prerequisite flow.
+- Enforces a logical sequence: **Topics → Slots → Exam Date (Compulsory) → Skip Days (Optional) → Generate**.
+- Timetable generation is strictly blocked until an exam date is provided.
+- Chatbot proactively asks for the next missing piece of information.
+
+### 4. OCR Exam Timetable Parsing (Enhanced)
+- **Multi-branch support**: Detects CE, CS A, CS B, EC, EE, ME branches
+- **Branch auto-resolution**: User can specify branch in context (e.g., "I am CS A")
+- **Past date detection**: Warns if exam dates are in the past
+- **Date correction flow**: User can provide corrected dates in natural language
+- **Gemini 2.5 Flash API** integration for intelligent parsing
+- `ExamSubject` model stores parsed subjects with exam dates
+
+### 5. AI Curriculum Architect (Implemented)
+- Automatic curriculum synthesis for new subjects.
+- When a topic is added, the LLM generates a list of 5–8 high-level chapters.
+- Timetable entries are labeled with specific chapters (e.g., "Math: Algebra").
+- Sequencing logic ensures chapters are covered in a balanced order.
+
+### 6. Conversational Chatbot Endpoint
 - Single orchestrator endpoint: `/api/chatbot/converse/`
 - Tool-routed behavior via optional `tool` key:
-  - `onboarding`
-  - `generate_timetable`
-  - `ocr_exam_parser`
-  - `rag_chat`
-- Auto-detection fallback when `tool` is omitted:
-  - onboarding payload -> onboarding flow
-  - `exam_image` -> OCR flow
-  - `generate_timetable` flag -> generation flow
-  - `message` text -> RAG chat flow
+  - `onboarding` - User profile setup
+  - `generate_timetable` - Generate study timetable
+  - `ocr_exam_parser` - Parse exam timetable from image
+  - `rag_chat` - Chat with AI assistant
+  - `adaptive_reschedule` - Reschedule on missed tasks
+  - `generate_notes_from_conversation` - Generate study notes
+- Auto-detection fallback when `tool` is omitted
 
-### 4. Onboarding Persistence
-- `UserProfile` model implemented and migrated
-- Onboarding fields are upserted via chatbot flow:
-  - `goal_type`
-  - `exam_date`
-  - `knowledge_level`
-  - `daily_free_hours`
-  - `occupation`
-  - `preferred_study_time`
-  - `learning_style`
+### 7. Exam-Aware Timetable Generation
+- **ML Ranker**: PyTorch-based model for optimal slot selection
+- **Score-weighted algorithm**: Considers priority, difficulty, days until exam
+- **Exam proximity**: Earlier exams get higher priority
+- **Adaptive chunk sizing**: Adjusts session length based on feedback
 
-### 5. Exam Timetable Parsing + Subject Creation
-- OCR extraction service (`extract_text_from_image`)
-- Deterministic parser (`parse_exam_timetable`) for date and subject extraction
-- `ExamSubject` model implemented and migrated
-- Parsed subjects are upserted and linked to user
-- Matching topics are auto-created from parsed subject names
+### 8. Feedback Analysis and Adaptive Rescheduling
+- **Keyword detection**: time_constraints, fatigue, difficulty, urgency
+- **Strategy building**: Adjusts chunk size, priority boost, extra minutes
+- **Auto-reschedule**: Triggers when user misses session without response
+- **Quiz prompts**: Generates questions to verify learning
 
-### 6. AI-oriented Timetable Generation
-- New generator service (`generate_timetable_for_user`) implemented
-- Prioritization considers:
-  - topic priority
-  - exam proximity
-  - subject difficulty
-  - user knowledge level
-- Falls back to baseline greedy scheduler if no AI-generated entries are produced
+### 9. Notifications System
+- Pre-reminder notifications (10 min before)
+- Completion check notifications (after session ends)
+- Auto-reschedule for pending checks (30 min grace period)
+- Notification pipeline service for background processing
 
-### 7. Conversation History Persistence and Retrieval
-- Chatbot now persists messages into:
+### 10. Onboarding Persistence
+- `UserProfile` model with fields:
+  - `goal_type`, `exam_date`, `knowledge_level`
+  - `daily_free_hours`, `skip_days`
+  - `occupation`, `preferred_study_time`, `learning_style`
+
+### 11. Conversation History Persistence and Retrieval
+- Chatbot persists messages into:
   - `Conversation`
   - `Message`
 - Supports continuation through optional `conversation_id`
+- `parsed_subjects_for_setup` field for OCR flow continuity
 - New history endpoints:
   - `GET /api/chatbot/conversations/`
   - `GET /api/chatbot/conversations/<conversation_id>/messages/`
 
-### 8. RAG-style Chat and Fallback Safety
+### 12. RAG-style Chat and Fallback Safety
 - Retrieves best matching embedded document context when available
 - Calls Groq chat completion API for response generation
 - Safe fallback behaviors implemented:
   - missing Groq key -> explicit message response
   - embedding model load failure -> no-context response path
   - missing OCR libs -> empty OCR text path, no crash
+  - Gemini API rate limit (429) -> graceful error message
 
-### 9. Testing Status
-- Full API flow tests are present and passing
-- Dedicated chatbot tests cover:
-  - onboarding tool
-  - timetable generation tool
-  - RAG fallback
-  - conversation persistence
-  - conversation history retrieval
+### 13. Testing Status
+- **35+ tests passing** across chatbot, timetable, users modules
+- E2E workflow tests for complete user journey
+- OCR pipeline tests with fixture PDF
+- Feedback analysis keyword detection tests
+- Timezone conversion tests (IST)
 
-### 10. Adaptive Rescheduling (Implemented)
-- New chatbot tool: `adaptive_reschedule`
-- Accepts missed entry context and user feedback reason
-- Feedback analyzer applies strategy based on reason keywords:
-  - split smaller chunks for time constraints
-  - increase priority for missed topic
-  - add extra estimated minutes for difficult topics
-- Regenerates upcoming timetable using adaptive chunk size
-- Preserves conversational continuity with `conversation_id`
+### 14. Study Notes (Stack-like)
+- `StudyNote` model for storing AI-generated notes
+- Frontend fetches through `/api/chatbot/notes/` endpoint
+- Notes created via `generate_notes_from_conversation` tool
 
-### 11. Conversational AI Notes (Stack-like)
-- New `StudyNote` model for storing AI-generated notes.
-- Frontend fetches dynamically through `/api/chatbot/notes/` endpoint.
-- Notes are created via the `generate_notes_from_conversation` tool which reads a conversation's history and creates a summarized bulleted note stack.
+### 15. Timezone Handling
+- All times stored in UTC in database
+- Serialized to IST (+05:30) in API responses
+- `TimetableEntrySerializer` and `FreeSlotSerializer` handle conversion
 
 ---
-
 ## API Endpoints (Current)
 
 ### Auth
@@ -125,51 +137,80 @@ Build a conversational productivity backend where users can plan, generate, and 
 - `GET /api/auth/me/`
 
 ### Timetable
-- `GET /api/timetable/entries/`
-- `GET /api/timetable/entries/`
-- `PATCH /api/timetable/entries/<id>/`
+- `GET /api/timetable/entries/` - List all entries
+- `POST /api/timetable/entries/` - Create entry
+- `GET /api/timetable/entries/<id>/` - Get entry
+- `PATCH /api/timetable/entries/<id>/` - Update entry
+- `POST /api/timetable/entries/<id>/completion-response/` - Mark complete/missed
+- `GET /api/timetable/notifications/` - List notifications
+- `PATCH /api/timetable/notifications/<id>/read/` - Mark notification read
+- `GET /api/timetable/free-slots/` - List free slots
+- `POST /api/timetable/free-slots/` - Create free slots
 
 ### Chatbot
-- `POST /api/chatbot/converse/` (Omni-endpoint for `generate_timetable`, `save_timetable_config`, `generate_notes_from_conversation`, etc.)
-- `GET /api/chatbot/conversations/`
-- `GET /api/chatbot/conversations/<conversation_id>/messages/`
-- `GET /api/chatbot/notes/`
+- `POST /api/chatbot/converse/` - Omni-endpoint for all chatbot tools
+- `GET /api/chatbot/conversations/` - List conversations
+- `GET /api/chatbot/conversations/<id>/messages/` - Get messages
+- `GET /api/chatbot/notes/` - Get study notes
+
+### Users
+- `GET /` - Tester HTML interface
 
 ---
+## Deployment
 
+### Railway
+- PostgreSQL database on Railway
+- Environment variables:
+  - `DATABASE_URL`
+  - `SECRET_KEY`
+  - `DEBUG=False`
+  - `GROQ_API_KEY`
+  - `GEMINI_API_KEY`
+
+### Local Development
+- SQLite database
+- `python manage.py runserver`
+
+---
 ## Completed Tasks Summary
-- Core auth and user management implemented
-- Timetable models, validations, and baseline scheduler implemented
-- Conversational onboarding implemented
-- OCR parsing pipeline implemented with fail-safe behavior
-- ExamSubject and UserProfile models added with migrations
-- AI-prioritized timetable generation implemented
-- Adaptive rescheduling for missed tasks implemented
-- RAG-style chatbot response path implemented
-- Conversation/message persistence implemented
-- Conversation history endpoints implemented
-- Tests updated and passing for core flows
+- ✅ Core auth and user management implemented
+- ✅ Timetable models, validations, and baseline scheduler implemented
+- ✅ Conversational onboarding implemented
+- ✅ OCR parsing pipeline with Gemini API (multi-branch support)
+- ✅ ExamSubject and UserProfile models with migrations
+- ✅ AI-prioritized timetable generation with ML ranker
+- ✅ Adaptive rescheduling for missed tasks with feedback analysis
+- ✅ RAG-style chatbot response path implemented
+- ✅ Conversation/message persistence implemented
+- ✅ Conversation history endpoints implemented
+- ✅ Notification pipeline with pre-reminders and completion checks
+- ✅ IST timezone handling in serializers
+- ✅ Past date detection and correction flow
+- ✅ Branch auto-resolution in OCR parsing
+- ✅ Tests updated and passing (35+ tests)
+- ✅ E2E workflow tests for complete user journey
 
 ---
-
 ## Priority Next Tasks
 
 ### P0 (High Impact)
-- Add study verification flow (quiz/summarization prompts) and update completion confidence
-- Add explicit OCR clarification loop (degree/semester/subject confirmation) before final commit
+- [ ] Add quiz/summarization prompts for study verification
+- [ ] Add Celery workers for background job processing
+- [ ] Add Redis for caching and rate limiting
 
 ### P1 (Operational Hardening)
-- Add Celery workers and scheduled reminder dispatch using Redis
-- Add retry and timeout policies for external LLM/OCR interactions
-- Improve response schema consistency across all chatbot tools
+- [ ] Add retry and timeout policies for external LLM/OCR interactions
+- [ ] Improve response schema consistency across all chatbot tools
+- [ ] Add rate limiting for API endpoints
 
 ### P2 (AI Architecture Expansion)
-- Introduce LangGraph agent orchestration for dynamic tool selection
-- Move from DB-only embedding retrieval to FAISS/Chroma vector store
-- Add analytics and feedback loop for plan effectiveness tracking
+- [ ] Move from DB-only embedding retrieval to FAISS/Chroma vector store
+- [ ] Add analytics and feedback loop for plan effectiveness tracking
+- [ ] Add more ML training data for better scheduling
 
 ---
-
 ## Notes
-- OCR service code supports graceful fallback, but production OCR quality requires Tesseract runtime installation.
-- Current reminder model exists but active reminder jobs are not yet implemented.
+- OCR service uses Gemini 2.5 Flash API (gemini-1.5-flash deprecated)
+- Current reminder model exists but active reminder jobs require Celery
+- ML ranker uses PyTorch with synthetic training data

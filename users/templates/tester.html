@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Timetable Planner - API Tester</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --panel-bg: #1e293b;
+            --text-color: #f8fafc;
+            --primary: #3b82f6;
+            --primary-hover: #2563eb;
+            --secondary: #10b981;
+            --danger: #ef4444;
+            --border: #334155;
+        }
+        body {
+            font-family: 'Inter', system-ui, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .panel {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+        .full-width {
+            grid-column: 1 / -1;
+        }
+        h1, h2, h3 { color: #fff; margin-top: 0; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-size: 0.9em; color: #cbd5e1; }
+        input, select, textarea, button {
+            width: 100%;
+            padding: 10px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background: #0f172a;
+            color: #fff;
+            box-sizing: border-box;
+            font-family: inherit;
+        }
+        button {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            transition: background-color 0.2s;
+        }
+        button:hover { background-color: var(--primary-hover); }
+        button.secondary { background-color: var(--secondary); }
+        .response-box {
+            background-color: #000;
+            color: #10b981;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            height: 200px;
+            overflow-y: auto;
+            margin-top: 10px;
+            border: 1px solid var(--border);
+        }
+        .flex { display: flex; gap: 10px; }
+        .status-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            background: var(--danger);
+        }
+        .status-badge.active { background: var(--secondary); }
+    </style>
+</head>
+<body>
+
+<h1>AI Timetable Planner - End-to-End API Tester</h1>
+<p>Status: <span id="authStatus" class="status-badge">Not Authenticated</span> | User: <span id="authUser" style="font-weight:bold;">None</span></p>
+
+<div class="container">
+    <!-- Auth Panel -->
+    <div class="panel">
+        <h2>1. Authentication & Profile</h2>
+        <div class="flex">
+            <div class="form-group" style="flex:1">
+                <label>Email</label>
+                <input type="email" id="email" value="testuser123@example.com">
+            </div>
+            <div class="form-group" style="flex:1">
+                <label>Password</label>
+                <input type="password" id="password" value="Testing123!">
+            </div>
+        </div>
+        <div class="flex">
+            <button onclick="apiCall('POST', '/api/auth/register/', {email: getVal('email'), password: getVal('password')}, 'authResponse')">Register</button>
+            <button onclick="login()" class="secondary">Login</button>
+            <button onclick="apiCall('GET', '/api/auth/me/', null, 'authResponse')">Get Profile</button>
+        </div>
+        <div class="response-box" id="authResponse">Logs...</div>
+    </div>
+
+    <!-- Chatbot Orchestrator Panel -->
+    <div class="panel">
+        <h2>2. Omnichannel Chatbot & Actions</h2>
+        <div class="form-group">
+            <label>Conversation ID <span style="color:#10b981">(Auto-filled after first request)</span></label>
+            <input type="number" id="conversationId" placeholder="53 (copy from OCR response if needed)">
+        </div>
+        <div class="form-group">
+            <label>Tool Selector (Optional, or Auto-Infer)</label>
+            <select id="chatTool">
+                <option value="">(Auto-infer)</option>
+                <option value="onboarding">Onboarding Config</option>
+                <option value="save_timetable_config">Setup Custom Config</option>
+                <option value="generate_timetable">Generate Timetable</option>
+                <option value="rag_chat">Chat / Question</option>
+                <option value="adaptive_reschedule">Adaptive Reschedule</option>
+                 <option value="generate_notes_from_conversation">Generate Notes</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Message / Chat Text / Reason <span style="color:#fbbf24">(Reply: "CS A", "CS B", etc.)</span></label>
+            <textarea id="chatMessage" rows="2" placeholder="Type your message or branch selection (e.g., CS A)..."></textarea>
+        </div>
+        <div class="form-group">
+            <label>JSON Payload (For Onboarding / Generate)</label>
+            <textarea id="chatPayload" rows="3" placeholder='{"onboarding": {"goal_type": "Pass standard semester exams"}}'></textarea>
+        </div>
+        <div class="flex">
+            <button onclick="sendChatbotRequest()">Send to Bot</button>
+            <button onclick="apiCall('GET', '/api/chatbot/conversations/', null, 'chatResponse')" class="secondary">History</button>
+            <button onclick="apiCall('GET', '/api/chatbot/notes/', null, 'chatResponse')" class="secondary" style="background:var(--primary)">Notes</button>
+        </div>
+        <div class="response-box" id="chatResponse">Logs...</div>
+    </div>
+
+    <!-- OCR Upload Panel -->
+    <div class="panel" style="grid-column: 1 / -1;">
+        <h2>3. OCR Exam Extractor (Image/PDF)</h2>
+        <div class="flex">
+            <div class="form-group" style="flex:1;">
+                <label>Select Timetable Image or PDF</label>
+                <input type="file" id="examImage" accept="image/*,.pdf">
+            </div>
+            <div class="form-group" style="flex:1;">
+                <label>Branch Context <span style="color:#fbbf24">(Required: e.g., 'CS A', 'CS B', 'CE')</span></label>
+                <input type="text" id="ocrPrompt" placeholder="Enter your branch (e.g., CS A)">
+            </div>
+        </div>
+        <div class="flex">
+            <button onclick="uploadOCR()" class="secondary">Upload & Parse</button>
+        </div>
+        <p style="color:#94a3b8; font-size:0.85em; margin-top:5px;">
+            After upload, chatbot will ask for your free slots. Then generate timetable!
+        </p>
+        <div class="response-box" id="ocrResponse">Logs...</div>
+    </div>
+
+    <!-- Timetable Validation -->
+    <div class="panel" style="grid-column: 1 / -1;">
+        <h2>4. Manage Timetable & Sessions</h2>
+        <div class="flex">
+            <button onclick="apiCall('GET', '/api/timetable/entries/', null, 'timetableResponse')">Fetch Entries</button>
+            <button onclick="apiCall('GET', '/api/timetable/notifications/', null, 'timetableResponse')" class="secondary">Notifications</button>
+        </div>
+        <div class="form-group" style="margin-top: 15px;">
+            <label>Complete a Session (Look up Entry ID above)</label>
+            <div class="flex" style="align-items: center;">
+                <input type="number" id="sessionId" placeholder="Entry ID" style="max-width: 150px;">
+                <button onclick="completeSession(true)">Mark Complete</button>
+            </div>
+            <label style="margin-top:5px; color:#ef4444;">Or Miss the Session</label>
+            <div class="flex" style="align-items: center;">
+                <input type="text" id="checkReason" placeholder="Reason (e.g., 'Too tough')">
+                <button onclick="completeSession(false)" style="background:var(--danger)">Mark Missed (Trigger Reschedule)</button>
+            </div>
+        </div>
+        <div class="response-box" id="timetableResponse">Logs...</div>
+    </div>
+</div>
+
+<script>
+    let accessToken = localStorage.getItem('access_token') || null;
+    let authEmail = localStorage.getItem('auth_email') || null;
+    let currentConversationId = null;
+
+    function getVal(id) { return document.getElementById(id).value; }
+    
+    function logResponse(id, text) {
+        document.getElementById(id).textContent = typeof text === 'object' ? JSON.stringify(text, null, 2) : text;
+    }
+
+    function updateAuthStatus() {
+        const el = document.getElementById('authStatus');
+        const usr = document.getElementById('authUser');
+        if (accessToken) {
+            el.textContent = "Authenticated";
+            el.className = "status-badge active";
+            usr.textContent = authEmail || "Logged in";
+        } else {
+            el.textContent = "Not Authenticated";
+            el.className = "status-badge";
+            usr.textContent = "None";
+        }
+    }
+
+    async function apiCall(method, url, data, responseBoxId) {
+        logResponse(responseBoxId, "Loading...");
+        const headers = { 'Content-Type': 'application/json' };
+        if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`;
+
+        try {
+            const res = await fetch(url, {
+                method,
+                headers,
+                body: data ? JSON.stringify(data) : null
+            });
+            const text = await res.text();
+            
+            if(res.status === 401) {
+                logResponse(responseBoxId, "Unauthorized - Refresh token or Login again.\n" + text);
+                return;
+            }
+
+            try {
+                const json = JSON.parse(text);
+                logResponse(responseBoxId, json);
+                
+                // Automatically persist conversation_id if returned
+                if (json.conversation_id && responseBoxId === 'chatResponse') {
+                    currentConversationId = json.conversation_id;
+                }
+                
+                return json;
+            } catch (e) {
+                logResponse(responseBoxId, `Status: ${res.status}\n${text}`);
+            }
+        } catch (e) {
+            logResponse(responseBoxId, `Network Error: ${e.message}`);
+        }
+    }
+
+    async function login() {
+        const email = getVal('email');
+        const json = await apiCall('POST', '/api/auth/token/', { email: email, password: getVal('password') }, 'authResponse');
+        if (json && json.access) {
+            accessToken = json.access;
+            authEmail = email;
+            localStorage.setItem('access_token', json.access);
+            localStorage.setItem('auth_email', email);
+            updateAuthStatus();
+            logResponse('authResponse', "Login Successful!\n" + JSON.stringify(json, null, 2));
+        }
+    }
+
+    async function sendChatbotRequest() {
+        if (!accessToken) return alert("Please Login First (Section 1)");
+        
+        const tool = getVal('chatTool');
+        const message = getVal('chatMessage');
+        const payloadStr = getVal('chatPayload');
+        const convId = getVal('conversationId');
+        
+        let data = {};
+        if (payloadStr && payloadStr.trim()) {
+            try { 
+                Object.assign(data, JSON.parse(payloadStr)); 
+            } catch (e) { 
+                alert("Invalid JSON Payload format"); return; 
+            }
+        }
+        
+        if (tool) data.tool = tool;
+        if (message) data.message = message;
+        
+        // Use manual conversation ID if entered, otherwise use auto-persisted one
+        const finalConvId = convId || currentConversationId;
+        if (finalConvId) data.conversation_id = parseInt(finalConvId);
+
+        await apiCall('POST', '/api/chatbot/converse/', data, 'chatResponse');
+    }
+
+    async function uploadOCR() {
+        if (!accessToken) return alert("Please Login First (Section 1)");
+        const fileInput = document.getElementById('examImage');
+        if (!fileInput.files.length) return alert("Select a file first.");
+
+        const formData = new FormData();
+        formData.append('exam_image', fileInput.files[0]);
+        formData.append('tool', 'ocr_exam_parser');
+        formData.append('message', getVal('ocrPrompt'));
+
+        logResponse('ocrResponse', "Uploading... Parsing with Gemini 2.5 flash...");
+
+        try {
+            const res = await fetch('/api/chatbot/converse/', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${accessToken}` },
+                body: formData
+            });
+            const text = await res.text();
+            const json = JSON.parse(text);
+            logResponse('ocrResponse', json);
+
+            // Auto-fill conversation ID in chatbot section
+            if (json.conversation_id) {
+                document.getElementById('conversationId').value = json.conversation_id;
+                currentConversationId = json.conversation_id;
+            }
+        } catch (e) {
+            logResponse('ocrResponse', `Error: ${e.message}`);
+        }
+    }
+
+    async function completeSession(completed) {
+        if (!accessToken) return alert("Please Login First (Section 1)");
+        const id = getVal('sessionId');
+        if (!id) return alert("Please enter a valid Timetable Entry ID (fetch entries to see IDs)");
+
+        const data = { completed: completed };
+        if (!completed) data.response_text = getVal('checkReason') || "No reason given";
+        else data.quiz_answer = "Everything was great";
+
+        await apiCall('POST', `/api/timetable/entries/${id}/completion-response/`, data, 'timetableResponse');
+    }
+
+    updateAuthStatus();
+</script>
+</body>
+</html>

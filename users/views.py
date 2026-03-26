@@ -15,6 +15,8 @@ from .serializers import (
     PasswordResetConfirmSerializer,
 )
 from django.contrib.auth import get_user_model
+from .models import UserProfile
+from .serializers import UserProfileSerializer
 
 User = get_user_model()
 
@@ -32,8 +34,24 @@ class MeView(APIView):
             "first_name": getattr(user, "first_name", ""),
             "last_name": getattr(user, "last_name", "")
         })
+
+class ProfileView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        profile, _ = UserProfile.objects.get_or_create(user=request.user)
+        serializer = UserProfileSerializer(profile)
+        return Response(serializer.data)
+
+    def patch(self, request):
+        profile, _ = UserProfile.objects.get_or_create(user=request.user)
+        serializer = UserProfileSerializer(profile, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
 def home(request):
-    return HttpResponse("<h1>david oru kunna</h1>")
+    return render(request, "tester.html")
 
 
 class RegisterView(generics.CreateAPIView):

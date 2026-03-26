@@ -129,6 +129,8 @@ pip install -r requirements-ml.txt
 
 ### Chatbot
 - `POST /api/chatbot/converse/`
+  - Supports **Gated Scheduling Flow**: (Topics → Slots → Exam Date → Skip Days → Generate)
+  - Supports **AI Curriculum Generation**: (Automatically synthesizes chapters for new subjects)
 - `GET /api/chatbot/conversations/`
 - `GET /api/chatbot/conversations/<conversation_id>/messages/`
 

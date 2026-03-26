@@ -1,0 +1,26 @@
+﻿python : C:\Program F
+iles\Python311\python
+.exe: can't open 
+file 'C:\\mini projec
+t\\test_strict_gating
+.py': [Errno 2] No 
+such file or 
+directory
+At line:1 char:1
++ python test_strict_
+gating.py 2>&1 | 
+Out-File -Encoding 
+utf8 strict_ga ...
++ ~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~
+    + CategoryInfo   
+           : NotSpe  
+  cified: (C:\Prog   
+ ram File...le or    
+ directory:Strin    
+g) [], RemoteExc    
+eption
+    + FullyQualified 
+   ErrorId : Native  
+  CommandError
+ 

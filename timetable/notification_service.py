@@ -276,7 +276,7 @@ def apply_completion_response(
     result = adaptive_reschedule_for_user(user=user, reason=reason, entry_id=entry.id)
 
     check.auto_rescheduled = True
-    check.save(update_fields=["auto_rescheduled"])
+    check.save()
     create_reschedule_notification(user=user, entry=entry, result=result, reason=reason, now=now)
 
     return {

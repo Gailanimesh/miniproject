@@ -1,0 +1,535 @@
+{
+  "info": {
+    "name": "AI Timetable Planner API",
+    "description": "Complete API testing collection for the AI Timetable Planner backend",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "accessToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "conversationId",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "1. Authentication",
+      "item": [
+        {
+          "name": "Register User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200 || pm.response.code === 201) {",
+                  "    const jsonData = pm.response.json();",
+                  "    if (jsonData.access) {",
+                  "        pm.collectionVariables.set('accessToken', jsonData.access);",
+                  "        pm.test('Token saved', true);",
+                  "    }",
+                  "}",
+                  "pm.test('Status is 200 or 201', pm.response.code === 200 || pm.response.code === 201);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"testuser{{$timestamp}}@example.com\",\n    \"password\": \"TestPass123!\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/register/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "register", ""]
+            }
+          }
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const jsonData = pm.response.json();",
+                  "    if (jsonData.access) {",
+                  "        pm.collectionVariables.set('accessToken', jsonData.access);",
+                  "    }",
+                  "}",
+                  "pm.test('Status is 200', pm.response.code === 200);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"testuser@example.com\",\n    \"password\": \"TestPass123!\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/token/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "token", ""]
+            }
+          }
+        },
+        {
+          "name": "Get Profile",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/me/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "me", ""]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Onboarding",
+      "item": [
+        {
+          "name": "Setup Profile via Chatbot",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"tool\": \"onboarding\",\n    \"onboarding\": {\n        \"goal_type\": \"Internal Exam\",\n        \"knowledge_level\": \"intermediate\",\n        \"daily_free_hours\": 3,\n        \"exam_date\": \"2026-04-15\"\n    }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chatbot/converse/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chatbot", "converse", ""]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Topics & Free Slots",
+      "item": [
+        {
+          "name": "Add Topics",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"topics\": [\n        {\"name\": \"Compiler Design\", \"estimated_minutes\": 180, \"priority\": 1},\n        {\"name\": \"Data Structures\", \"estimated_minutes\": 240, \"priority\": 2},\n        {\"name\": \"Algorithm Analysis\", \"estimated_minutes\": 200, \"priority\": 3}\n    ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chatbot/converse/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chatbot", "converse", ""]
+            }
+          }
+        },
+        {
+          "name": "Add Free Slots (JSON)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"free_slots\": [\n        {\"start\": \"2026-03-27T19:00:00Z\", \"end\": \"2026-03-27T22:00:00Z\"},\n        {\"start\": \"2026-03-28T19:00:00Z\", \"end\": \"2026-03-28T22:00:00Z\"}\n    ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chatbot/converse/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chatbot", "converse", ""]
+            }
+          }
+        },
+        {
+          "name": "Add Free Slots (Natural Language)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"message\": \"I'm free from 7pm to 10pm every day\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chatbot/converse/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chatbot", "converse", ""]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. OCR Exam Timetable",
+      "item": [
+        {
+          "name": "Upload Timetable Image",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "exam_image",
+                  "type": "file",
+                  "src": "",
+                  "description": "Upload exam timetable image"
+                },
+                {
+                  "key": "tool",
+                  "value": "ocr_exam_parser",
+                  "type": "text"
+                },
+                {
+                  "key": "message",
+                  "value": "CS A",
+                  "type": "text",
+                  "description": "Branch context"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chatbot/converse/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chatbot", "converse", ""]
+            }
+          }
+        },
+        {
+          "name": "Reply with Branch Selection",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"message\": \"CS A\",\n    \"conversation_id\": \"{{conversationId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chatbot/converse/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chatbot", "converse", ""]
+            }
+          }
+        },
+        {
+          "name": "Provide Corrected Dates",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"message\": \"CST 302 Compiler Design - 2026-04-02, CST 304 - 2026-04-03\",\n    \"conversation_id\": \"{{conversationId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chatbot/converse/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chatbot", "converse", ""]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Timetable Generation",
+      "item": [
+        {
+          "name": "Generate Timetable",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"tool\": \"generate_timetable\",\n    \"generate_timetable\": true,\n    \"conversation_id\": \"{{conversationId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chatbot/converse/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chatbot", "converse", ""]
+            }
+          }
+        },
+        {
+          "name": "Provide Free Slots (after OCR)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"message\": \"7pm to 10pm daily\",\n    \"conversation_id\": \"{{conversationId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chatbot/converse/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chatbot", "converse", ""]
+            }
+          }
+        },
+        {
+          "name": "Skip Days (Optional)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"message\": \"No skip days\",\n    \"conversation_id\": \"{{conversationId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chatbot/converse/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chatbot", "converse", ""]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Timetable Management",
+      "item": [
+        {
+          "name": "List Entries",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/timetable/entries/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "timetable", "entries", ""]
+            }
+          }
+        },
+        {
+          "name": "Mark Entry Complete",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"completed\": true,\n    \"quiz_answer\": \"Process scheduling\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/timetable/entries/1/completion-response/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "timetable", "entries", "1", "completion-response", ""]
+            }
+          }
+        },
+        {
+          "name": "Mark Entry Missed (Triggers Reschedule)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"completed\": false,\n    \"response_text\": \"I was too busy with work\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/timetable/entries/1/completion-response/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "timetable", "entries", "1", "completion-response", ""]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. Notifications",
+      "item": [
+        {
+          "name": "List Notifications",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/timetable/notifications/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "timetable", "notifications", ""]
+            }
+          }
+        },
+        {
+          "name": "Mark Notification Read",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"is_actioned\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/timetable/notifications/1/read/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "timetable", "notifications", "1", "read", ""]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "8. Conversations",
+      "item": [
+        {
+          "name": "List Conversations",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/chatbot/conversations/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chatbot", "conversations", ""]
+            }
+          }
+        },
+        {
+          "name": "Get Conversation Messages",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/chatbot/conversations/{{conversationId}}/messages/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chatbot", "conversations", "{{conversationId}}", "messages", ""]
+            }
+          }
+        },
+        {
+          "name": "Get Study Notes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/chatbot/notes/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chatbot", "notes", ""]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "9. RAG Chat",
+      "item": [
+        {
+          "name": "Chat with AI",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"message\": \"How should I prepare for Compiler Design?\",\n    \"conversation_id\": \"{{conversationId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chatbot/converse/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chatbot", "converse", ""]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

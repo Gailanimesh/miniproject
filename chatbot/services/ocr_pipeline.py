@@ -32,6 +32,7 @@ def extract_text_from_file_with_gemini(file_source, mime_type="image/jpeg", user
     if not api_key:
         return {"exam": None, "subjects": [], "error": "GEMINI_API_KEY is not configured."}
 
+    # Updated to gemini-2.5-flash (gemini-1.5-flash is deprecated)
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
 
     try:
@@ -47,18 +48,22 @@ def extract_text_from_file_with_gemini(file_source, mime_type="image/jpeg", user
     b64_data = base64.b64encode(file_data).decode("utf-8")
 
     sys_text = (
-        "Analyze this timetable image and output a raw JSON dictionary without Markdown blocks. "
-        "Strictly adhere to this structure: "
+        "Analyze this timetable image/PDF and extract the examination schedule. "
+        "Output a raw JSON dictionary. Strictly adhere to this structure: "
         '{"has_multiple_branches": boolean, '
         '"detected_branches": ["string"], '
         '"exam": "string", '
         '"subjects": [{"name": "string", "date": "YYYY-MM-DD", "difficulty": "medium"}], '
         '"branch_subjects": {"branch_name": [{"name": "string", "date": "YYYY-MM-DD", "difficulty": "medium"}]} }. '
-        "If there are multiple branches/streams in the timetable (like CE, CS A, EE, etc.): "
-        f"1. Check if the user specified their branch here: '{user_prompt}'. "
-        "2. If the user explicitly specified a branch, ignore the others and populate the main 'subjects' array ONLY with their branch's subjects. "
-        "3. If the user did NOT specify a branch, leave the main 'subjects' array EMPTY [] but populate 'branch_subjects' with a map of every branch name to its specific array of subjects. Set 'has_multiple_branches' to true. "
-        "If it is a single-branch timetable, just populate the main 'subjects' array normally."
+        "\n\nGuidelines:\n"
+        "1. Identify all subjects, their full names, and their scheduled dates.\n"
+        "2. Dates MUST be in YYYY-MM-DD format. If year is missing, assume current year.\n"
+        "3. If multiple branches/streams exist (e.g., CS, EE, Civil):\n"
+        f"   - Check if user's branch is mentioned in this request: '{user_prompt}'.\n"
+        "   - If matched, populate 'subjects' with ONLY that branch and set 'has_multiple_branches' to true.\n"
+        "   - If NOT matched, leave 'subjects' empty, set 'has_multiple_branches' to true, and populate 'branch_subjects' for EVERY branch found.\n"
+        "4. If only one branch exists, populate 'subjects' and leave 'branch_subjects' empty.\n"
+        "5. IMPORTANT: Output ONLY the raw JSON. No markdown blocks, no triple backticks."
     )
 
     payload = {
@@ -88,16 +93,17 @@ def extract_text_from_file_with_gemini(file_source, mime_type="image/jpeg", user
     
     # Clean up standard markdown markers if the model ignored our rule
     extracted = extracted.strip()
-    if extracted.startswith("```json"):
-        extracted = extracted[7:]
+    if extracted.startswith("```"):
+        # Remove any leading backticks and language identifiers
+        extracted = re.sub(r'^```(?:json)?\s*', '', extracted)
     if extracted.endswith("```"):
-        extracted = extracted[:-3]
+        extracted = extracted.rstrip("`").strip()
         
     try:
         parsed_json = json.loads(extracted.strip())
         return parsed_json
     except json.JSONDecodeError:
-        return {"exam": None, "subjects": [], "error": "Gemini returned invalid JSON."}
+        return {"exam": None, "subjects": [], "error": f"Gemini returned invalid JSON: {extracted[:100]}..."}
 
 def _is_pdf(file_source):
     """Check if the file is a PDF by reading its magic bytes."""

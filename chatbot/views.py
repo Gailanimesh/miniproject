@@ -1,5 +1,6 @@
 import os
-from datetime import date
+import re
+from datetime import date, datetime
 
 import numpy as np
 import requests
@@ -21,6 +22,7 @@ from .serializers import ConversationSerializer, MessageSerializer, StudyNoteSer
 from .services.feedback_analyzer import adaptive_reschedule_for_user
 from .services.ocr_pipeline import extract_text_from_image, parse_exam_timetable
 from .services.timetable_generator import generate_timetable_for_user
+from .services.intent_parser import extract_prerequisites_from_chat
 
 load_dotenv()
 
@@ -40,6 +42,147 @@ def _try_get_embedding_model():
         EMBEDDING_MODEL = False
 
     return EMBEDDING_MODEL
+
+
+def _parse_subject_date_format(user_message, user):
+    """
+    Parse messages in format: 'Subject - YYYY-MM-DD' or 'Subject: YYYY-MM-DD'
+    Also handles natural language: 'Math by April 10', 'Physics on April 15'
+    Also handles: 'Subject 2026-03-30'
+    
+    Returns dict with 'updated_topics' list and 'latest_date'.
+    """
+    from users.models import UserProfile
+    from dateutil import parser as date_parser
+    import dateutil
+    
+    updated_topics = []
+    all_dates = []
+    
+    # Pattern 1: "Subject - YYYY-MM-DD" or "Subject: YYYY-MM-DD"
+    pattern1 = re.compile(r'([a-zA-Z][a-zA-Z0-9\s]*?)\s*[-:]\s*(\d{4}-\d{2}-\d{2})', re.IGNORECASE)
+    
+    # Pattern 2: "os 2026-03-30" (space between subject and date)
+    pattern2 = re.compile(r'([a-zA-Z][a-zA-Z0-9]*)\s+(\d{4}-\d{2}-\d{2})', re.IGNORECASE)
+    
+    # Pattern 3: "Subject by April 10" or "Subject on April 15" (natural language)
+    pattern3 = re.compile(r'([a-zA-Z][a-zA-Z0-9\s]+?)\s+(?:by|on|before|due)\s+([A-Za-z]+\s+\d{1,2}(?:,?\s*\d{4})?)', re.IGNORECASE)
+    
+    matches = pattern1.findall(user_message)
+    
+    if not matches:
+        matches = pattern2.findall(user_message)
+    
+    for subject_name, date_str in matches:
+        subject_name = subject_name.strip()
+        date_str = date_str.strip()
+        
+        try:
+            parsed_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            all_dates.append(parsed_date)
+            
+            # Clean up subject name (remove common words)
+            clean_name = _clean_subject_name(subject_name)
+            
+            # Find or create the topic
+            topic = Topic.objects.filter(user=user, name__iexact=clean_name).first()
+            if not topic:
+                # Try partial match
+                topic = Topic.objects.filter(user=user, name__icontains=clean_name).first()
+            
+            if topic:
+                old_date = topic.target_date
+                topic.target_date = parsed_date
+                topic.save(update_fields=['target_date'])
+                updated_topics.append({
+                    'name': topic.name,
+                    'old_date': str(old_date) if old_date else None,
+                    'new_date': parsed_date.isoformat(),
+                    'is_new': False
+                })
+            else:
+                # Create new topic with target date
+                topic = Topic.objects.create(
+                    user=user,
+                    name=clean_name,
+                    estimated_minutes=120,
+                    priority=1,
+                    target_date=parsed_date
+                )
+                updated_topics.append({
+                    'name': topic.name,
+                    'old_date': None,
+                    'new_date': parsed_date.isoformat(),
+                    'is_new': True
+                })
+        except ValueError:
+            continue
+    
+    # Also handle natural language patterns like "Math by April 10"
+    natural_matches = pattern3.findall(user_message)
+    for subject_name, date_str in natural_matches:
+        subject_name = subject_name.strip()
+        date_str = date_str.strip()
+        
+        try:
+            # Try to parse the date
+            if dateutil is None:
+                from dateutil import parser as date_parser
+            parsed_date = date_parser.parse(date_str, fuzzy=True).date()
+            all_dates.append(parsed_date)
+            
+            # Clean up subject name
+            clean_name = _clean_subject_name(subject_name)
+            if len(clean_name) < 2:
+                continue
+                
+            # Find or create the topic
+            topic = Topic.objects.filter(user=user, name__iexact=clean_name).first()
+            if not topic:
+                topic = Topic.objects.filter(user=user, name__icontains=clean_name).first()
+            
+            if topic:
+                old_date = topic.target_date
+                topic.target_date = parsed_date
+                topic.save(update_fields=['target_date'])
+                updated_topics.append({
+                    'name': topic.name,
+                    'old_date': str(old_date) if old_date else None,
+                    'new_date': parsed_date.isoformat(),
+                    'is_new': False
+                })
+            else:
+                topic = Topic.objects.create(
+                    user=user,
+                    name=clean_name,
+                    estimated_minutes=120,
+                    priority=1,
+                    target_date=parsed_date
+                )
+                updated_topics.append({
+                    'name': topic.name,
+                    'old_date': None,
+                    'new_date': parsed_date.isoformat(),
+                    'is_new': True
+                })
+        except Exception:
+            continue
+    
+    latest_date = max(all_dates) if all_dates else None
+    
+    return {
+        'updated_topics': updated_topics,
+        'latest_date': latest_date,
+        'has_updates': len(updated_topics) > 0
+    }
+
+
+def _clean_subject_name(name):
+    """Remove common words from subject name."""
+    skip_words = {'by', 'on', 'before', 'due', 'the', 'a', 'an', 'for', 'to', 'and', 'or'}
+    words = name.split()
+    cleaned = [w for w in words if w.lower() not in skip_words]
+    return ' '.join(cleaned).strip() if cleaned else name.strip()
 
 
 def call_groq_api(prompt, context, system_prompt):
@@ -135,14 +278,146 @@ def _upsert_exam_subjects(user, parsed_data):
     return created_or_updated
 
 
+def _parse_corrected_dates(message):
+    """
+    Parse corrected exam dates from user message.
+    Expected format: "Subject Name - 2026-04-15, Subject Name - 2026-04-16"
+    Returns list of tuples: [(original_name, new_date)]
+    """
+    from datetime import datetime
+    import re
+    
+    updated_dates = []
+    
+    # Split by comma or newline to get individual entries
+    entries = re.split(r'[,\n]', message)
+    
+    for entry in entries:
+        entry = entry.strip()
+        if not entry:
+            continue
+        
+        # Try different date patterns
+        date_patterns = [
+            (r'(\d{4}-\d{2}-\d{2})', "%Y-%m-%d"),  # 2026-04-15
+            (r'(\d{2}/\d{2}/\d{4})', "%d/%m/%Y"),   # 15/04/2026
+            (r'(\d{2}-\d{2}-\d{4})', "%d-%m-%Y"),   # 15-04-2026
+        ]
+        
+        found_date = None
+        matched_pattern = None
+        
+        for pattern, fmt in date_patterns:
+            match = re.search(pattern, entry)
+            if match:
+                date_str = match.group(1)
+                try:
+                    found_date = datetime.strptime(date_str, fmt).date()
+                    matched_pattern = pattern
+                    break
+                except ValueError:
+                    continue
+        
+        if found_date:
+            # Extract subject name (everything before the date pattern)
+            date_match = re.search(matched_pattern, entry)
+            if date_match:
+                subject_name = entry[:date_match.start()].strip().rstrip('-').strip()
+                if subject_name:
+                    updated_dates.append((subject_name, found_date))
+    
+    return updated_dates
+
+
+def _update_exam_dates(user, updated_dates):
+    """
+    Update exam dates for subjects based on parsed corrections.
+    updated_dates is a list of tuples: [(original_name, new_date)]
+    
+    Generic matching algorithm:
+    1. Extract meaningful words from both user input and DB subject names
+    2. Match based on shared significant words
+    3. No hardcoded course codes or specific department logic
+    """
+    from users.models import UserProfile
+    import re
+    
+    # Update ExamSubject dates
+    exam_subjects = list(ExamSubject.objects.filter(user=user))
+    updated_count = 0
+    latest_date = None
+    
+    # Extract meaningful words from user input
+    def get_significant_words(text):
+        """Extract significant words, skipping course codes like CET, CST, HUT, etc."""
+        words = re.findall(r'\b[a-zA-Z]{4,}\b', text.lower())
+        skip_words = {'from', 'with', 'this', 'that', 'have', 'been', 'will', 'would', 'could', 'should', 'exam', 'subject', 'course', 'test', 'paper', 'semester'}
+        return [w for w in words if w not in skip_words]
+    
+    # Build matching index from user input
+    user_subjects = []  # [(clean_name, significant_words, new_date)]
+    for original_name, new_date in updated_dates:
+        sig_words = get_significant_words(original_name)
+        # Create a normalized name without course codes
+        clean_name = ' '.join(sig_words[:3]) if sig_words else original_name
+        user_subjects.append({
+            'original': original_name,
+            'clean': clean_name,
+            'words': set(sig_words),
+            'date': new_date
+        })
+    
+    # Match each exam subject with user input
+    for exam_subj in exam_subjects:
+        subj_text = exam_subj.name.lower()
+        subj_words = get_significant_words(exam_subj.name)
+        subj_word_set = set(subj_words)
+        
+        best_match = None
+        best_score = 0
+        
+        for user_subj in user_subjects:
+            # Calculate match score based on shared significant words
+            shared_words = subj_word_set & user_subj['words']
+            score = len(shared_words)
+            
+            # Prefer matches with more shared words
+            if score > best_score:
+                best_score = score
+                best_match = user_subj
+        
+        # If we found a match with at least 1 significant word
+        if best_match and best_score >= 1:
+            exam_subj.exam_date = best_match['date']
+            exam_subj.save(update_fields=["exam_date"])
+            updated_count += 1
+            
+            if latest_date is None or best_match['date'] > latest_date:
+                latest_date = best_match['date']
+    
+    # Update profile's exam_date to the latest corrected date
+    if latest_date:
+        profile, _ = UserProfile.objects.get_or_create(user=user)
+        profile.exam_date = latest_date
+        profile.save(update_fields=["exam_date"])
+    
+    return updated_count
+
+
+IST_OFFSET = timezone.timedelta(hours=5, minutes=30)
+
+
 def _serialize_timetable_entry(entry):
     duration_minutes = int((entry.end - entry.start).total_seconds() // 60)
+    topic_name = getattr(entry, "temp_display_name", entry.topic.name)
+    ist_offset = timezone.timedelta(hours=5, minutes=30)
+    ist_tz = timezone.get_fixed_timezone(ist_offset)
     return {
         "id": entry.id,
-        "topic": entry.topic.name,
+        "topic": topic_name,
         "topic_id": entry.topic_id,
-        "start": entry.start,
-        "end": entry.end,
+        "start": entry.start.astimezone(ist_tz),
+        "end": entry.end.astimezone(ist_tz),
         "duration_minutes": duration_minutes,
         "done": entry.done,
     }
@@ -153,11 +428,11 @@ def _build_timetable_payload(entries, strategy=None, generation_meta=None):
     ai_used = bool(generation_meta.get("ai_used"))
 
     payload = {
-        "generated_at": timezone.now().isoformat(),
+        "generated_at": timezone.now(),
         "algorithm": generation_meta.get("algorithm", "unknown"),
-        "ai_used": ai_used,
-        "fallback_used": not ai_used,
-        "entries": [_serialize_timetable_entry(entry) for entry in entries],
+        "ai_used": bool(generation_meta.get("ai_used")),
+        "fallback_used": bool(generation_meta.get("fallback_used")),
+        "entries": [_serialize_timetable_entry(e) for e in entries],
     }
 
     if strategy is not None:
@@ -221,18 +496,23 @@ def _handle_save_timetable_config(request):
 
 
 def _handle_generate_notes_from_conversation(request, conversation):
-    if not conversation:
-        return Response({"error": "A conversation_id is required to extract notes.", "tool": "generate_notes_from_conversation"}, status=status.HTTP_400_BAD_REQUEST)
+    user_message = request.data.get("message", "").strip()
+    history_text = ""
     
-    messages = conversation.messages.order_by("timestamp")
-    if not messages.exists():
-        return Response({"error": "Conversation is empty.", "tool": "generate_notes_from_conversation"}, status=status.HTTP_400_BAD_REQUEST)
-    
-    history_text = "\n".join([f"{msg.sender}: {msg.text}" for msg in messages])
+    if conversation:
+        messages = conversation.messages.order_by("timestamp")
+        if messages.exists():
+            history_text = "\n".join([f"{msg.sender}: {msg.text}" for msg in messages])
+            
+    if user_message:
+        history_text += f"\nuser: {user_message}"
+        
+    if not history_text.strip():
+        return Response({"error": "A conversation history or message is required to extract notes.", "tool": "generate_notes_from_conversation"}, status=status.HTTP_400_BAD_REQUEST)
     
     system_prompt = (
-        "You are an AI study assistant. The user wants to create a saved 'Study Note' from the following conversation history. "
-        "Extract the most important educational or factual key points discussed, and format them as a concise, bulleted markdown list. "
+        "You are an AI study assistant. The user wants to create a saved 'Study Note'. "
+        "Extract the most important educational or factual key points discussed, or answer their specific prompt, and format them as a concise, bulleted markdown list. "
         "Do not include conversational filler. Just the notes. Start with a short title for the note on the first line like '# Title'."
     )
     
@@ -241,7 +521,7 @@ def _handle_generate_notes_from_conversation(request, conversation):
         return Response({"error": "GROQ_API_KEY is not configured.", "tool": "generate_notes_from_conversation"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
     payload = {
-        "model": "llama3-8b-8192",
+        "model": "llama-3.1-8b-instant",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Conversation:\n{history_text}"},
@@ -280,6 +560,11 @@ def _handle_generate_notes_from_conversation(request, conversation):
             "note": serializer.data
         }, status=status.HTTP_201_CREATED)
         
+    except requests.exceptions.HTTPError as e:
+        err_out = str(e)
+        if hasattr(e, 'response') and e.response is not None:
+            err_out += f" - Response: {e.response.text}"
+        return Response({"error": f"Failed to generate notes: {err_out}", "tool": "generate_notes_from_conversation"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     except Exception as e:
         return Response({"error": f"Failed to generate notes: {str(e)}", "tool": "generate_notes_from_conversation"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -307,20 +592,74 @@ def _handle_onboarding(request):
     )
 
 
-def _handle_timetable_generation(request):
-    if not request.data.get("generate_timetable"):
+def _handle_timetable_generation(request, force=False, planning_type="SHORT_TERM"):
+    has_payload = bool(request.data.get("generate_timetable"))
+    user_msg = request.data.get("message", "").lower()
+    msg_intent = "generate" in user_msg and ("timetable" in user_msg or "schedule" in user_msg)
+    
+    if not force and not has_payload and not msg_intent:
         return None
 
+    # ── STRICT PREREQUISITE CHECK ──────────────────────────────────────────
+    from timetable.models import Topic, FreeSlot
+    from users.models import UserProfile as UP
+    
+    has_topics = Topic.objects.filter(user=request.user).exists()
+    has_slots = FreeSlot.objects.filter(user=request.user).exists()
+    profile = UP.objects.filter(user=request.user).first()
+    has_exam_date = bool(profile and getattr(profile, "exam_date", None))
+
+    if not has_topics or not has_slots or not has_exam_date:
+        missing = []
+        if not has_topics: missing.append("subjects")
+        if not has_slots: missing.append("study hours")
+        if not has_exam_date: missing.append("exam/target date")
+        
+        p_response = f"I need a few more details before I can generate your timetable. Specifically: **{', '.join(missing)}**."
+        if not has_topics:
+            p_response = (
+                "Sure! Let's build your study plan.\n\n"
+                "What subjects are you focusing on?\n"
+                "You can also set individual deadlines like:\n"
+                "  - 'Math by April 10'\n"
+                "  - 'Physics - 2026-04-15'\n"
+                "  - 'Maths, Physics, Chemistry'"
+            )
+        elif not has_slots:
+            p_response = (
+                "Got your subjects! Now, what time are you free to study each day?\n"
+                "(e.g. '8pm to 10pm' or '6pm-10pm on weekdays')"
+            )
+        elif not has_exam_date:
+            p_response = (
+                "Slots saved! Finally, what is your exam or target date?\n"
+                "Format: 'April 5' or 'OS - 2026-04-10, DS - 2026-04-15'\n"
+                "(You can set different dates for each subject!)"
+            )
+
+        return Response(
+            {
+                "response": p_response,
+                "tool": "prereq_collect",
+                "entries": [],
+                "needs_prerequisites": True,
+                "missing": missing
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    # Proceed to generation only if all prerequisites are Met
     entries, generation_meta = generate_timetable_for_user(
         request.user,
         include_metadata=True,
         use_model_priority=True,
+        planning_type=planning_type,
     )
     entries = list(entries)
     if not entries:
         return Response(
             {
-                "response": "I couldn't generate any new timetable entries. Please ensure you have added your study topics and defined your free time slots first.",
+                "response": "Your timetable is currently complete! All active topics have been scheduled or finished.",
                 "tool": "generate_timetable",
                 "entries": [],
                 "generation": generation_meta,
@@ -432,23 +771,42 @@ def _handle_adaptive_reschedule(request, force=False):
     )
 
 
+def _resolve_branch_from_text(user_message, branches):
+    """
+    Tries to map user input to one of the detected branches.
+    Uses keyword matching and falls back to Groq LLM.
+    """
+    if not user_message or not branches:
+        return None
+        
+    msg = user_message.lower().strip()
+    
+    # 1. Exact or keyword match
+    for b in branches:
+        b_low = b.lower().strip()
+        if b_low == msg or b_low in msg or msg in b_low:
+            return b
+            
+    # 2. LLM Fallback for ambiguous or implicit mentions
+    # Example: "i am cs student" matching "CS A"
+    prompt = f"User message: '{user_message}'. Detected branches in timetable: {branches}."
+    sys_prompt = "You are extracting the chosen branch from a message. Reply with ONLY the exact name of the best matching branch from the list. If none match, reply 'NONE'."
+    reply = call_groq_api(prompt, "", sys_prompt)
+    candidate = reply.strip().strip('"').strip("'")
+    
+    if candidate in branches:
+        return candidate
+    return None
+
+
 def _handle_stateful_ocr_reply(request, conversation, user_message):
     pending_data = conversation.pending_ocr_data
     branch_subjects = pending_data.get("branch_subjects", {})
+    available_branches = list(branch_subjects.keys())
     
-    matched_branch = None
-    for branch in branch_subjects.keys():
-        if branch.lower() in user_message.lower():
-            matched_branch = branch
-            break
-            
-    if not matched_branch:
-        prompt = user_message
-        sys_prompt = f"You are extracting the chosen stream. Choices: {list(branch_subjects.keys())}. Reply with ONLY the exact name of the selected choice from the list. If none match, reply 'NONE'."
-        reply = call_groq_api(prompt, "", sys_prompt)
-        matched_branch = reply.strip()
+    matched_branch = _resolve_branch_from_text(user_message, available_branches)
         
-    if matched_branch in branch_subjects:
+    if matched_branch and matched_branch in branch_subjects:
         subjects_to_save = branch_subjects[matched_branch]
         parsed = {"subjects": subjects_to_save}
         subjects = _upsert_exam_subjects(request.user, parsed)
@@ -468,7 +826,7 @@ def _handle_stateful_ocr_reply(request, conversation, user_message):
     else:
         return Response(
             {
-                "response": "I couldn't identify that branch from the timetable. Please ensure you type one of: " + ", ".join(branch_subjects.keys()),
+                "response": "I couldn't identify that branch from the timetable. Please ensure you type one of: " + ", ".join(available_branches),
                 "tool": "ocr_exam_parser_need_branch",
             },
             status=status.HTTP_200_OK,
@@ -480,22 +838,49 @@ def _handle_ocr_parser(request, conversation=None):
     if not image:
         return None
 
+    # Create a new conversation if none provided (for OCR uploads)
+    if conversation is None:
+        conversation = Conversation.objects.create(
+            user=request.user,
+            title="Exam Timetable Upload"
+        )
+
     user_message = request.data.get("message", "")
     parsed = extract_text_from_image(image, user_prompt=user_message)
 
+    # FALLBACK: If Gemini returned branch_subjects but only ONE branch exists, 
+    # we can safely assume it's the correct one even if 'subjects' is empty.
+    branch_subjects = parsed.get("branch_subjects", {})
+    if not parsed.get("subjects") and len(branch_subjects) == 1:
+        single_branch_name = list(branch_subjects.keys())[0]
+        parsed["subjects"] = branch_subjects[single_branch_name]
+        parsed["has_multiple_branches"] = False # Treat as single branch now
+
     if parsed.get("has_multiple_branches") and not parsed.get("subjects"):
-        if conversation:
+        detected_branches = parsed.get("detected_branches", [])
+        
+        # Try to resolve branch from the initial user_message (Context Box)
+        resolved_branch = None
+        if user_message:
+             resolved_branch = _resolve_branch_from_text(user_message, detected_branches)
+              
+        if resolved_branch and resolved_branch in parsed.get("branch_subjects", {}):
+            parsed["subjects"] = parsed["branch_subjects"][resolved_branch]
+            # If resolved, we continue to _upsert_exam_subjects as if it were a single branch
+        else:
+            # Always save pending_ocr_data - conversation is now guaranteed to exist
             conversation.pending_ocr_data = parsed
             conversation.save(update_fields=["pending_ocr_data"])
-            
-        branches_str = ", ".join(parsed.get("detected_branches", []))
-        return Response(
-            {
-                "response": f"I detected multiple branches in this timetable ({branches_str}). Which stream are you in?",
-                "tool": "ocr_exam_parser_need_branch",
-            },
-            status=status.HTTP_200_OK,
-        )
+                
+            branches_str = ", ".join(detected_branches)
+            return Response(
+                {
+                    "response": f"I detected multiple branches in this timetable ({branches_str}). Which stream are you in?",
+                    "tool": "ocr_exam_parser_need_branch",
+                    "conversation_id": conversation.id,
+                },
+                status=status.HTTP_200_OK,
+            )
 
     subjects = _upsert_exam_subjects(request.user, parsed)
 
@@ -511,16 +896,208 @@ def _handle_ocr_parser(request, conversation=None):
                 "tool": "ocr_exam_parser",
                 "parsed": parsed,
                 "subjects_count": 0,
+                "conversation_id": conversation.id,
             },
             status=status.HTTP_200_OK,
         )
 
+    # Check if exam dates are in the past
+    from datetime import datetime
+    today = datetime.now().date()
+    past_dates = []
+    
+    for subj in subjects:
+        if hasattr(subj, 'exam_date') and subj.exam_date:
+            if subj.exam_date < today:
+                past_dates.append({"name": subj.name, "old_date": str(subj.exam_date)})
+    
+    # Store subjects info in conversation for later use
+    conversation.parsed_subjects_for_setup = {
+        "subjects": [{"name": s.name, "date": str(s.exam_date) if s.exam_date else None} for s in subjects],
+        "past_subjects": past_dates,
+    }
+    conversation.save(update_fields=["parsed_subjects_for_setup"])
+    
+    # Build user-friendly response
+    response_data = {
+        "tool": "ocr_exam_parser",
+        "parsed": parsed,
+        "subjects_count": len(subjects),
+        "subjects": [s.name for s in subjects],
+        "conversation_id": conversation.id,
+    }
+    
+    # Build the response message
+    response_parts = []
+    
+    # Detect branch from parsed data
+    branch_name = parsed.get("detected_branches", [])
+    if len(branch_name) == 1:
+        response_parts.append(f"Detected you're in **{branch_name[0]}** branch.")
+    elif parsed.get("subjects"):
+        response_parts.append(f"Found **{len(subjects)} subjects** from your exam timetable.")
+    
+    # Show subject list
+    subject_list = "\n".join([f"  - {s.name} ({s.exam_date})" for s in subjects[:5]])
+    if len(subjects) > 5:
+        subject_list += f"\n  - ...and {len(subjects) - 5} more"
+    response_parts.append(f"**Your Subjects:**\n{subject_list}")
+    
+    # Check for past dates
+    if past_dates:
+        past_list = "\n".join([f"  - {p['name']}: {p['old_date']}" for p in past_dates])
+        response_parts.append(f"**⚠️ Some exam dates are in the past:**\n{past_list}")
+        response_parts.append("Please enter the correct exam dates for these subjects (format: Subject Name - New Date, e.g., 'Compiler Design - 2026-04-15')")
+        response_data["response"] = "\n\n".join(response_parts)
+        response_data["needs_past_date_correction"] = True
+    else:
+        # Ask for free slots
+        response_parts.append("**To generate your study timetable, I need to know your free slots.**")
+        response_parts.append("When are you available to study? (e.g., '7pm to 10pm daily' or 'Mornings 9am-12pm on weekdays')")
+        response_data["response"] = "\n\n".join(response_parts)
+        response_data["needs_free_slots"] = True
+    
+    return Response(response_data, status=status.HTTP_200_OK)
+
+
+def _handle_auto_setup_from_ocr(request, conversation=None):
+    """
+    Automatically sets up profile, exam date, creates free slots, and generates timetable
+    from parsed OCR data. Uses exam dates from the timetable to calculate study period.
+    """
+    from datetime import datetime, timedelta
+    from timetable.models import Topic, FreeSlot, TimetableEntry
+    from users.models import UserProfile
+    
+    # Get parsed data from conversation or request
+    parsed = None
+    
+    if conversation and conversation.pending_ocr_data:
+        parsed = conversation.pending_ocr_data
+        conversation.pending_ocr_data = None
+        conversation.save(update_fields=["pending_ocr_data"])
+    elif request.data.get("parsed"):
+        parsed = request.data.get("parsed")
+    
+    if not parsed:
+        return Response(
+            {"error": "No parsed timetable data available. Please upload an exam timetable first."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    subjects = parsed.get("subjects", [])
+    if not subjects:
+        return Response(
+            {"error": "No subjects found in parsed data."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # 1. Get or create profile
+    profile, _ = UserProfile.objects.get_or_create(user=request.user)
+    
+    # 2. Set exam date from latest subject date (last exam = final exam day)
+    exam_dates = []
+    for s in subjects:
+        date_str = s.get("date")
+        if date_str:
+            try:
+                exam_dates.append(datetime.strptime(date_str, "%Y-%m-%d").date())
+            except (ValueError, TypeError):
+                pass
+    
+    if exam_dates:
+        exam_dates.sort()
+        profile.exam_date = exam_dates[-1]  # Last exam date
+        profile.days_until_exam = (exam_dates[-1] - datetime.now().date()).days
+    
+    # 3. Set default profile values
+    profile.goal_type = "Internal Exam"
+    profile.knowledge_level = "intermediate"
+    profile.daily_free_hours = 3
+    profile.save()
+    
+    # 4. Delete existing topics and free slots
+    Topic.objects.filter(user=request.user).delete()
+    FreeSlot.objects.filter(user=request.user).delete()
+    TimetableEntry.objects.filter(user=request.user).delete()
+    
+    # 5. Create topics with priority based on exam date (earlier exams = higher priority)
+    topic_objects = []
+    now = datetime.now().date()
+    
+    for i, subj in enumerate(subjects):
+        date_str = subj.get("date")
+        exam_date = None
+        days_to_exam = 999
+        
+        if date_str:
+            try:
+                exam_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                days_to_exam = (exam_date - now).days
+            except (ValueError, TypeError):
+                pass
+        
+        # Priority: earlier exams get higher priority (lower number = higher priority)
+        priority = max(1, min(10, 10 - (i if i < 10 else 10)))
+        
+        topic = Topic.objects.create(
+            user=request.user,
+            name=subj.get("name", "Unknown Subject"),
+            estimated_minutes=120,  # 2 hours per subject
+            priority=priority,
+            difficulty_score=3 if subj.get("difficulty") == "hard" else 2,
+        )
+        topic_objects.append(topic)
+    
+    # 6. Create free slots from today until last exam date (7pm-10pm daily)
+    today = datetime.now().date()
+    days_until_last_exam = (exam_dates[-1] - today).days if exam_dates else 14
+    days_until_last_exam = max(1, min(days_until_last_exam, 30))  # Cap at 30 days
+    
+    start_hour = 19  # 7pm
+    end_hour = 22    # 10pm
+    
+    for i in range(days_until_last_exam):
+        day = today + timedelta(days=i)
+        FreeSlot.objects.create(
+            user=request.user,
+            start=datetime.combine(day, datetime.min.time().replace(hour=start_hour)),
+            end=datetime.combine(day, datetime.min.time().replace(hour=end_hour))
+        )
+    
+    # 7. Generate timetable with exam-aware scheduling
+    entries, generation_meta = generate_timetable_for_user(
+        request.user,
+        include_metadata=True,
+        use_model_priority=True,
+        planning_type="SHORT_TERM",
+    )
+    entries = list(entries)
+    
+    entries_payload = [_serialize_timetable_entry(entry) for entry in entries]
+    timetable_payload = _build_timetable_payload(entries=entries, generation_meta=generation_meta)
+    
+    # Build subject list with exam dates for response
+    subject_list = []
+    for subj in subjects:
+        subject_list.append(f"{subj.get('name')} (Exam: {subj.get('date', 'TBD')})")
+    
     return Response(
         {
-            "response": "Exam timetable parsed and saved to your subjects! You can now generate your timetable.",
-            "tool": "ocr_exam_parser",
-            "parsed": parsed,
+            "response": f"Auto setup complete!\n\nFound {len(subjects)} subjects:\n" + "\n".join(subject_list[:5]) + (f"\n...and {len(subjects)-5} more" if len(subjects) > 5 else "") + f"\n\nLast exam: {profile.exam_date}\nDays to prepare: {days_until_last_exam} days\nCreated {days_until_last_exam} days of study slots (7pm-10pm)\nGenerated {len(entries)} timetable entries!",
+            "tool": "auto_setup_from_ocr",
+            "subjects": subjects,
             "subjects_count": len(subjects),
+            "free_slots_created": days_until_last_exam,
+            "entries": entries_payload,
+            "timetable": timetable_payload,
+            "generation": generation_meta,
+            "profile": {
+                "goal_type": profile.goal_type,
+                "exam_date": str(profile.exam_date) if profile.exam_date else None,
+                "days_until_exam": days_until_last_exam,
+                "daily_free_hours": profile.daily_free_hours,
+            }
         },
         status=status.HTTP_200_OK,
     )
@@ -610,10 +1187,20 @@ def _persist_messages(request, response, user_message, conversation):
         )
 
     if bot_message:
+        import json
+        from django.core.serializers.json import DjangoJSONEncoder
+        
+        bot_payload = {
+            "tool": response.data.get("tool"),
+            "entries": response.data.get("entries"),
+            "generation": response.data.get("generation"),
+        }
+        bot_payload = json.loads(json.dumps(bot_payload, cls=DjangoJSONEncoder))
         Message.objects.create(
             conversation=conversation,
             sender="bot",
             text=bot_message,
+            payload=bot_payload,
         )
 
     response.data["conversation_id"] = conversation.id
@@ -636,14 +1223,34 @@ class ChatbotConversationView(APIView):
         if conversation_error:
             return conversation_error
 
+        # ── Step 0: RESET DECISION (Gated early so tool handlers don't bypass) ──
+        from timetable.models import Topic, TimetableEntry
+        has_topics = Topic.objects.filter(user=request.user).exists()
+        has_existing_schedule = TimetableEntry.objects.filter(user=request.user).exists()
+        is_generate_intent = any(kw in user_message.lower() for kw in ["generate", "timetable", "schedule"])
+        
+        if (has_topics or has_existing_schedule) and is_generate_intent:
+            # Check if they have ALREADY given the choice in this message
+            if not any(kw in user_message.lower() for kw in ["fresh", "previous", "keep", "start over"]):
+                 # We only trigger this if it's NOT a direct tool call from the frontend (which usually has its own state)
+                 if not requested_tool:
+                     reset_q = (
+                         "I see you already have a study plan! 📚\n\n"
+                         "Would you like to **Start Fresh** (clears everything) or **Use Previous Data** to generate a new timetable?"
+                     )
+                     return _persist_messages(request,
+                         Response({"response": reset_q, "tool": "prereq_collect", "choice_required": True}, status=200),
+                         user_message, conversation)
+
         handlers = {
             "onboarding": lambda: _handle_onboarding(request),
-            "generate_timetable": lambda: _handle_timetable_generation(request),
+            "generate_timetable": lambda: _handle_timetable_generation(request, force=True),
             "adaptive_reschedule": lambda: _handle_adaptive_reschedule(request, force=True),
             "ocr_exam_parser": lambda: _handle_ocr_parser(request, conversation=conversation),
             "save_timetable_config": lambda: _handle_save_timetable_config(request),
             "generate_notes_from_conversation": lambda: _handle_generate_notes_from_conversation(request, conversation=conversation),
             "rag_chat": lambda: _handle_rag_chat(user_message, conversation=conversation),
+            "auto_setup_from_ocr": lambda: _handle_auto_setup_from_ocr(request, conversation=conversation),
         }
 
         if requested_tool in handlers:
@@ -661,6 +1268,27 @@ class ChatbotConversationView(APIView):
         if conversation and conversation.pending_ocr_data and user_message:
             response = _handle_stateful_ocr_reply(request, conversation, user_message)
             return _persist_messages(request, response, user_message, conversation)
+        
+        # Handle date correction after OCR
+        if conversation and conversation.parsed_subjects_for_setup and user_message:
+            past_subjects = conversation.parsed_subjects_for_setup.get("past_subjects", [])
+            if past_subjects and "needs_past_date_correction" not in str(request.data):
+                # User is providing corrected exam dates
+                updated_dates = _parse_corrected_dates(user_message)
+                if updated_dates:
+                    _update_exam_dates(request.user, updated_dates)
+                    # Clear the flag since dates are now corrected
+                    conversation.parsed_subjects_for_setup = None
+                    conversation.save(update_fields=["parsed_subjects_for_setup"])
+                    
+                    # Ask for free slots
+                    return _persist_messages(request,
+                        Response({
+                            "response": f"Updated! Your exam dates have been corrected.\n\nNow, what are your free study slots? (e.g., '7pm to 10pm daily' or 'Mornings 9am-12pm on weekdays')",
+                            "tool": "prereq_collect",
+                            "next_step": "free_slots",
+                        }, status=200),
+                        user_message, conversation)
 
         for inferred_tool in [
             _handle_onboarding,
@@ -668,12 +1296,288 @@ class ChatbotConversationView(APIView):
             _handle_save_timetable_config if ("topics" in request.data or "free_slots" in request.data) else lambda req: None,
             _handle_timetable_generation,
             _handle_adaptive_reschedule,
+            lambda req: _handle_generate_notes_from_conversation(req, conversation) if ("note " in req.data.get("message", "").lower() or ("notes" in req.data.get("message", "").lower())) else None,
         ]:
             response = inferred_tool(request)
             if response:
                 return _persist_messages(request, response, user_message, conversation)
 
         if user_message:
+            last_bot_msg = None
+            if conversation:
+                last_bot_msg = conversation.messages.filter(sender="bot").order_by("-timestamp").first()
+            last_bot_text = last_bot_msg.text.lower() if last_bot_msg else ""
+            last_bot_tool = last_bot_msg.payload.get("tool") if (last_bot_msg and last_bot_msg.payload) else None
+
+            # ── STATE MACHINE: Gated multi-step prerequisite collection ──────────
+            from timetable.models import Topic, FreeSlot
+            from users.models import UserProfile as UP
+
+            has_topics = Topic.objects.filter(user=request.user).exists()
+            has_slots = FreeSlot.objects.filter(user=request.user).exists()
+            profile = UP.objects.filter(user=request.user).first()
+            has_exam_date = bool(profile and getattr(profile, "exam_date", None))
+
+            # Detect keywords that signal the user is providing scheduling info
+            prereq_keywords = ["free", "pm", "am", ":", "study", "subject", "topic",
+                               "generate", "timetable", "schedule", "exam", "until", "date",
+                               "week", "monday", "tuesday", "wednesday", "thursday", "friday",
+                               "saturday", "sunday", "skip", "off", "holiday", "busy", "none",
+                               "fresh", "previous", "start over", "keep", "-", "/", "by", "deadline"]
+            # Detect digits as potential dates/times
+            is_prereq_message = any(kw in user_message.lower() for kw in prereq_keywords) or any(char.isdigit() for char in user_message)
+            is_prereq_state = (last_bot_tool == "prereq_collect")
+
+            # Step 0: RESET DECISION (If topics or timetable exists, ask if they want to start fresh)
+            from timetable.models import TimetableEntry
+            has_existing_schedule = TimetableEntry.objects.filter(user=request.user).exists()
+            is_generate_intent = any(kw in user_message.lower() for kw in ["generate", "timetable", "schedule"])
+            
+            if (has_topics or has_existing_schedule) and is_generate_intent:
+                # Only ask if they haven't ALREADY given the answer in this message
+                if "fresh" not in user_message.lower() and "previous" not in user_message.lower() and "keep" not in user_message.lower():
+                     reset_q = (
+                         "I see you already have a study plan! 📚\n\n"
+                         "Would you like to **Start Fresh** (clears everything) or **Use Previous Data** to generate a new timetable?"
+                     )
+                     return _persist_messages(request,
+                         Response({"response": reset_q, "tool": "prereq_collect", "choice_required": True}, status=200),
+                         user_message, conversation)
+
+            if "start fresh" in user_message.lower() or "fresh" in user_message.lower():
+                Topic.objects.filter(user=request.user).delete()
+                FreeSlot.objects.filter(user=request.user).delete()
+                from timetable.models import TimetableEntry
+                TimetableEntry.objects.filter(user=request.user).delete()
+                if profile:
+                    profile.exam_date = None
+                    profile.skip_days = []
+                    profile.save()
+                return _persist_messages(request,
+                    Response({"response": "Data cleared! Let's start over. What subjects are you focusing on?", "tool": "prereq_collect"}, status=200),
+                    user_message, conversation)
+            
+            if "use previous" in user_message.lower() or "previous data" in user_message.lower() or "keep" in user_message.lower():
+                # Carry on with existing data
+                if has_topics and has_slots and has_exam_date:
+                     response = _handle_timetable_generation(request, force=True)
+                     return _persist_messages(request, response, user_message, conversation)
+                # Else it will fall through to missing prerequisites
+            
+            # Step A: If bot just asked for days to skip, parse the answer then generate
+            if "any days you'd like to skip" in last_bot_text:
+                skip_days = []
+                day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+                for d in day_names:
+                    if d in user_message.lower():
+                        skip_days.append(d.capitalize())
+
+                # FIX: Preserve existing skips if the user says "none" or just "no"
+                if not skip_days and ("none" in user_message.lower() or "no" in user_message.lower()):
+                     skip_days = profile.skip_days if profile else []
+                # FIX: If we have new skips, we should probably APPEND them or at least not clear if empty unless explicitly asked
+                elif not skip_days and "none" not in user_message.lower():
+                     # If they didn't say none but didn't list a day, maybe they are confused? 
+                     # For now, let's just keep previous if they didn't list new ones.
+                     skip_days = profile.skip_days if profile else []
+
+                # Persist to profile so the generator can see them
+                if profile:
+                    profile.skip_days = skip_days
+                    profile.save(update_fields=["skip_days"])
+
+                # Build readable planning_type from profile
+                planning_type = "SHORT_TERM" if has_exam_date else "CONTINUOUS"
+                response = _handle_timetable_generation(request, force=True,
+                                                        planning_type=planning_type)
+                if response and isinstance(response.data, dict):
+                    skip_note = f"Got it! Skipping {', '.join(skip_days)}. " if skip_days else "No extra skip days noted. "
+                    response.data["response"] = skip_note + response.data.get("response", "")
+                return _persist_messages(request, response, user_message, conversation)
+
+            # Step B: If bot just asked for the exam date, parse the answer
+            if "what is your exam or target date" in last_bot_text:
+                # First, try to parse "Subject - YYYY-MM-DD" format
+                subject_dates = _parse_subject_date_format(user_message, request.user)
+                
+                if subject_dates.get('has_updates'):
+                    # Successfully parsed subject-date pairs
+                    profile, created = UP.objects.get_or_create(user=request.user)
+                    
+                    # Update profile exam_date to latest date if provided
+                    latest_date = subject_dates.get('latest_date')
+                    if latest_date:
+                        profile.exam_date = latest_date
+                        profile.save(update_fields=['exam_date'])
+                    
+                    topic_list = []
+                    for t in subject_dates['updated_topics']:
+                        status_icon = "NEW" if t['is_new'] else "UPDATED"
+                        topic_list.append(f"  - {t['name']}: {t['new_date']} ({status_icon})")
+                    
+                    skip_msg = (
+                        f"Got it! I've saved the dates for {len(subject_dates['updated_topics'])} subject(s):\n" + 
+                        "\n".join(topic_list) +
+                        f"\n\nLast exam: {latest_date}\n\n"
+                        "Are there any days you'd like to skip? "
+                        "(e.g., 'I'm not free on Sundays', or just say 'none' to continue)"
+                    )
+                    return _persist_messages(request,
+                        Response({"response": skip_msg, "tool": "prereq_collect"}, status=200),
+                        user_message, conversation)
+                
+                # Fall back to LLM extraction
+                extract_result = extract_prerequisites_from_chat(request.user, user_message, conversation)
+                profile = UP.objects.filter(user=request.user).first()
+                has_exam_date = bool(profile and getattr(profile, "exam_date", None))
+                if has_exam_date:
+                    skip_msg = (
+                        "Perfect! I've saved your exam date 🗓️\n\n"
+                        "Are there any days you'd like to skip? "
+                        "(e.g., 'I'm not free on Sundays', or just say 'none' to continue)"
+                    )
+                    return _persist_messages(request,
+                        Response({"response": skip_msg, "tool": "prereq_collect"}, status=200),
+                        user_message, conversation)
+                else:
+                    return _persist_messages(request,
+                        Response({"response": "I couldn't quite catch the date. Please tell me your exam or target date.\nExamples:\n  - 'April 15'\n  - 'OS - 2026-04-10'\n  - 'Math by April 5, Physics - 2026-04-15'", "tool": "prereq_collect"}, status=200),
+                        user_message, conversation)
+
+            # Step C: If bot asked for free time slots, extract them
+            if "what time are you free to study" in last_bot_text:
+                extract_result = extract_prerequisites_from_chat(request.user, user_message, conversation)
+                added_s = extract_result.get("added_slots", [])
+                if added_s:
+                    # Now ask for exam date (compulsory next step)
+                    exam_q = (
+                        f"I've saved your study window ({', '.join(added_s)}) ✅\n\n"
+                        "What is your exam or target date?\n"
+                        "You can set:\n"
+                        "  - Single date: 'April 15'\n"
+                        "  - Per-subject: 'Math - April 10, Physics - April 15'"
+                    )
+                    return _persist_messages(request,
+                        Response({"response": exam_q, "tool": "prereq_collect"}, status=200),
+                        user_message, conversation)
+                else:
+                    return _persist_messages(request,
+                        Response({"response": "I didn't catch your free time. Please tell me when you're available to study.\nExamples: '8pm to 10pm', '6pm-10pm daily', '2pm-5pm on weekends'.", "tool": "prereq_collect"}, status=200),
+                        user_message, conversation)
+
+            # Step D: If bot asked for subjects, extract them
+            if "what subjects are you focusing on" in last_bot_text:
+                extract_result = extract_prerequisites_from_chat(request.user, user_message, conversation)
+                added_t = extract_result.get("added_topics", [])
+                if added_t:
+                    slot_q = (
+                        f"Got it! I've added your topics: **{', '.join(added_t)}** 📚\n\n"
+                        "What time are you free to study each day?\n"
+                        "(e.g., '8pm to 10pm' or '6pm-10pm daily')"
+                    )
+                    return _persist_messages(request,
+                        Response({"response": slot_q, "tool": "prereq_collect"}, status=200),
+                        user_message, conversation)
+                else:
+                    return _persist_messages(request,
+                        Response({"response": "I didn't catch any subjects. Please list the topics you want to study.\nYou can include deadlines like:\n  - 'Math by April 10'\n  - 'Physics - 2026-04-15'\n  - 'Chemistry, Biology'", "tool": "prereq_collect"}, status=200),
+                        user_message, conversation)
+
+            # Step E: Fresh intent — try to extract anything provided in this single message
+            if is_prereq_message:
+                # First, try to parse "Subject - YYYY-MM-DD" format
+                subject_dates = _parse_subject_date_format(user_message, request.user)
+                
+                if subject_dates.get('has_updates'):
+                    # Successfully parsed subject-date pairs
+                    profile, created = UP.objects.get_or_create(user=request.user)
+                    latest_date = subject_dates.get('latest_date')
+                    
+                    # Update profile exam_date to latest date if provided
+                    if latest_date:
+                        profile.exam_date = latest_date
+                        profile.save(update_fields=['exam_date'])
+                    
+                    topic_list = []
+                    for t in subject_dates['updated_topics']:
+                        status_icon = "NEW" if t['is_new'] else "UPDATED"
+                        topic_list.append(f"  - {t['name']}: {t['new_date']} ({status_icon})")
+                    
+                    response_text = (
+                        f"Got it! I've saved the dates for {len(subject_dates['updated_topics'])} subject(s):\n" + 
+                        "\n".join(topic_list) +
+                        f"\n\nLast exam: {latest_date}\n\n"
+                    )
+                    
+                    # Check if we have all prerequisites now
+                    has_topics = Topic.objects.filter(user=request.user).exists()
+                    has_slots = FreeSlot.objects.filter(user=request.user).exists()
+                    
+                    if has_topics and has_slots and latest_date:
+                        response_text += "Are there any days you'd like to skip? (e.g., 'I'm not free on Sundays', or say 'none' to generate now)"
+                        return _persist_messages(request,
+                            Response({"response": response_text, "tool": "prereq_collect"}, status=200),
+                            user_message, conversation)
+                    elif has_topics and not has_slots:
+                        response_text += "Now, what time are you free to study each day? (e.g., '8pm to 10pm')"
+                        return _persist_messages(request,
+                            Response({"response": response_text, "tool": "prereq_collect"}, status=200),
+                            user_message, conversation)
+                    else:
+                        response_text += "What time are you free to study each day? (e.g., '8pm to 10pm')"
+                        return _persist_messages(request,
+                            Response({"response": response_text, "tool": "prereq_collect"}, status=200),
+                            user_message, conversation)
+                
+                # Fall back to LLM extraction
+                extract_result = extract_prerequisites_from_chat(request.user, user_message, conversation)
+                added_t = extract_result.get("added_topics", [])
+                added_s = extract_result.get("added_slots", [])
+                profile = UP.objects.filter(user=request.user).first()
+                has_exam_date = bool(profile and getattr(profile, "exam_date", None))
+                has_topics = Topic.objects.filter(user=request.user).exists()
+                has_slots = FreeSlot.objects.filter(user=request.user).exists()
+
+                # If we have everything needed → ask about skip days then generate
+                if has_topics and has_slots and has_exam_date:
+                    return _persist_messages(request,
+                        Response({"response": "Are there any days you'd like to skip? (e.g., 'I'm not free on Sundays', or say 'none' to generate now)", "tool": "prereq_collect"}, status=200),
+                        user_message, conversation)
+
+                # Missing exam date → ask for it next
+                if has_topics and has_slots and not has_exam_date:
+                    return _persist_messages(request,
+                        Response({"response": f"I've saved your info ✅\n\nWhat is your exam or target date? (e.g., 'OS - 2026-04-05' or 'Physics by April 10')", "tool": "prereq_collect"}, status=200),
+                        user_message, conversation)
+
+                # Missing slots → ask for free time
+                if has_topics and not has_slots:
+                    return _persist_messages(request,
+                        Response({"response": f"Topics saved 📚 Now, what time are you free to study each day? (e.g., '8pm to 10pm')", "tool": "prereq_collect"}, status=200),
+                        user_message, conversation)
+
+                # Fallback: Treat as RAG if nothing clear was found, BUT if we are in a prereq state, try one last extract as a catch-all
+                if not (has_topics or has_slots or has_exam_date):
+                     # If they said something completely random while we were waiting for subjects, let RAG handle it
+                     pass
+
+            if is_prereq_state or is_prereq_message:
+                # If we're here, it means the specific step matching didn't yield a return
+                # We do a final extraction pass to see if we can move the needle
+                extract_result = extract_prerequisites_from_chat(request.user, user_message, conversation)
+                if extract_result.get("added_topics") or extract_result.get("added_slots"):
+                     # Re-run logic to see where we stand
+                     profile = UP.objects.filter(user=request.user).first()
+                     has_exam_date = bool(profile and getattr(profile, "exam_date", None))
+                     has_topics = Topic.objects.filter(user=request.user).exists()
+                     has_slots = FreeSlot.objects.filter(user=request.user).exists()
+                     
+                     if has_topics and has_slots and has_exam_date:
+                         return _persist_messages(request,
+                             Response({"response": "I've updated your info! Ready to generate? Or any days to skip?", "tool": "prereq_collect"}, status=200),
+                             user_message, conversation)
+                     # (Essentially re-trigger the E Logic but safer)
+
             response = _handle_rag_chat(user_message, conversation=conversation)
             return _persist_messages(request, response, user_message, conversation)
 
@@ -681,6 +1585,11 @@ class ChatbotConversationView(APIView):
             {
                 "error": "No actionable input provided.",
                 "hint": "Send message/onboarding/generate_timetable/exam_image/tool.",
+                "help": {
+                    "topics": "List your subjects: 'Math, Physics, Chemistry' or with deadlines: 'Math by April 10, Physics - 2026-04-15'",
+                    "slots": "Set free time: '8pm to 10pm' or '6pm-10pm weekdays'",
+                    "exam_date": "Set date: 'April 5' or per-subject: 'OS - 2026-04-10, DS - 2026-04-15'"
+                }
             },
             status=status.HTTP_400_BAD_REQUEST,
         )

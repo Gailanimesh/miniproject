@@ -1,9 +1,101 @@
-Creating test database for alias 'default'...
-........................
-----------------------------------------------------------------------
-Ran 24 tests in 18.125s
-
-OK
-Destroying test database for alias 'default'...
-Found 24 test(s).
+Found 25 test(s).
+Operations to perform:
+  Synchronize unmigrated apps: messages, rest_framework, staticfiles
+  Apply all migrations: admin, auth, chatbot, contenttypes, sessions, timetable, token_blacklist, users
+Synchronizing apps without migrations:
+  Creating tables...
+    Running deferred SQL...
+Running migrations:
+  Applying contenttypes.0001_initial... OK
+  Applying contenttypes.0002_remove_content_type_name... OK
+  Applying auth.0001_initial... OK
+  Applying auth.0002_alter_permission_name_max_length... OK
+  Applying auth.0003_alter_user_email_max_length... OK
+  Applying auth.0004_alter_user_username_opts... OK
+  Applying auth.0005_alter_user_last_login_null... OK
+  Applying auth.0006_require_contenttypes_0002... OK
+  Applying auth.0007_alter_validators_add_error_messages... OK
+  Applying auth.0008_alter_user_username_max_length... OK
+  Applying auth.0009_alter_user_last_name_max_length... OK
+  Applying auth.0010_alter_group_name_max_length... OK
+  Applying auth.0011_update_proxy_permissions... OK
+  Applying auth.0012_alter_user_first_name_max_length... OK
+  Applying users.0001_initial... OK
+  Applying admin.0001_initial... OK
+  Applying admin.0002_logentry_remove_auto_add... OK
+  Applying admin.0003_logentry_add_action_flag_choices... OK
+  Applying chatbot.0001_initial... OK
+  Applying chatbot.0002_document... OK
+  Applying chatbot.0003_usermodelsnapshot... OK
+  Applying chatbot.0004_conversation_title... OK
+  Applying chatbot.0005_conversation_pending_ocr_data... OK
+  Applying chatbot.0006_studynote... OK
+  Applying sessions.0001_initial... OK
+  Applying timetable.0001_initial... OK
+  Applying timetable.0002_examsubject... OK
+  Applying timetable.0003_usernotification_completioncheck... OK
+  Applying timetable.0004_rename_timetable_u_user_id_2fdf54_idx_timetable_u_user_id_3bf139_idx_and_more... OK
+  Applying token_blacklist.0001_initial... OK
+  Applying token_blacklist.0002_outstandingtoken_jti_hex... OK
+  Applying token_blacklist.0003_auto_20171017_2007... OK
+  Applying token_blacklist.0004_auto_20171017_2013... OK
+  Applying token_blacklist.0005_remove_outstandingtoken_jti... OK
+  Applying token_blacklist.0006_auto_20171017_2113... OK
+  Applying token_blacklist.0007_auto_20171017_2214... OK
+  Applying token_blacklist.0008_migrate_to_bigautofield... OK
+  Applying token_blacklist.0010_fix_migrate_to_bigautofield... OK
+  Applying token_blacklist.0011_linearizes_history... OK
+  Applying token_blacklist.0012_alter_outstandingtoken_user... OK
+  Applying token_blacklist.0013_alter_blacklistedtoken_options_and_more... OK
+  Applying users.0002_userprofile... OK
 System check identified no issues (0 silenced).
+Creating test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...
+
+test_adaptive_reschedule_auto_mode_without_payload (chatbot.tests.ChatbotConversationTests.test_adaptive_reschedule_auto_mode_without_payload) ... ok
+test_adaptive_reschedule_rejects_invalid_entry_id (chatbot.tests.ChatbotConversationTests.test_adaptive_reschedule_rejects_invalid_entry_id) ... ok
+test_adaptive_reschedule_tool (chatbot.tests.ChatbotConversationTests.test_adaptive_reschedule_tool) ... ok
+test_conversation_history_endpoints (chatbot.tests.ChatbotConversationTests.test_conversation_history_endpoints) ... ok
+test_generate_notes_from_conversation (chatbot.tests.ChatbotConversationTests.test_generate_notes_from_conversation) ... ok
+test_generate_timetable_tool (chatbot.tests.ChatbotConversationTests.test_generate_timetable_tool) ... ok
+test_onboarding_update (chatbot.tests.ChatbotConversationTests.test_onboarding_update) ... ok
+test_rag_chat_fallback (chatbot.tests.ChatbotConversationTests.test_rag_chat_fallback) ... FAIL
+test_dd_dash_mm_dash_yyyy (chatbot.tests_ocr.DateNormalisationTests.test_dd_dash_mm_dash_yyyy) ... ok
+test_dd_dot_mm_dot_yyyy (chatbot.tests_ocr.DateNormalisationTests.test_dd_dot_mm_dot_yyyy) ... ok
+test_dd_slash_mm_slash_yyyy (chatbot.tests_ocr.DateNormalisationTests.test_dd_slash_mm_slash_yyyy) ... ok
+test_invalid_date_returns_none (chatbot.tests_ocr.DateNormalisationTests.test_invalid_date_returns_none) ... ok
+test_iso_date_unchanged (chatbot.tests_ocr.DateNormalisationTests.test_iso_date_unchanged) ... ok
+test_api_accepts_pdf_and_returns_parsed_data (chatbot.tests_ocr.OCRAPITests.test_api_accepts_pdf_and_returns_parsed_data)
+POST fixture PDF \u2192 200 with tool=ocr_exam_parser and parsed subjects. ... ok
+test_api_creates_exam_subject_rows (chatbot.tests_ocr.OCRAPITests.test_api_creates_exam_subject_rows)
+PDF upload must result in ExamSubject rows in the DB. ... ok
+test_api_creates_topic_rows (chatbot.tests_ocr.OCRAPITests.test_api_creates_topic_rows)
+PDF upload must also create Topic rows for timetable scheduling. ... ok
+test_api_no_file_falls_through_to_rag (chatbot.tests_ocr.OCRAPITests.test_api_no_file_falls_through_to_rag)
+Without an image/PDF, the endpoint should NOT return ocr_exam_parser. ... ok
+test_api_subjects_count_matches_db (chatbot.tests_ocr.OCRAPITests.test_api_subjects_count_matches_db)
+subjects_count in API response must equal DB rows created. ... ok
+test_creates_exam_subjects (chatbot.tests_ocr.UpsertExamSubjectsTests.test_creates_exam_subjects) ... ok
+test_creates_topics_matching_subjects (chatbot.tests_ocr.UpsertExamSubjectsTests.test_creates_topics_matching_subjects) ... ok
+test_duplicate_call_does_not_create_duplicates (chatbot.tests_ocr.UpsertExamSubjectsTests.test_duplicate_call_does_not_create_duplicates) ... ok
+test_exam_subject_fields_stored_correctly (chatbot.tests_ocr.UpsertExamSubjectsTests.test_exam_subject_fields_stored_correctly) ... ok
+test_subject_invalid_date_is_skipped (chatbot.tests_ocr.UpsertExamSubjectsTests.test_subject_invalid_date_is_skipped) ... ok
+test_subject_missing_date_is_skipped (chatbot.tests_ocr.UpsertExamSubjectsTests.test_subject_missing_date_is_skipped) ... ok
+test_subject_missing_name_is_skipped (chatbot.tests_ocr.UpsertExamSubjectsTests.test_subject_missing_name_is_skipped) ... ok
+
+======================================================================
+FAIL: test_rag_chat_fallback (chatbot.tests.ChatbotConversationTests.test_rag_chat_fallback)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "c:\mini project\chatbot\tests.py", line 88, in test_rag_chat_fallback
+    self.assertEqual(response.data["tool"], "rag_chat")
+AssertionError: 'prereq_collect' != 'rag_chat'
+- prereq_collect
++ rag_chat
+
+
+----------------------------------------------------------------------
+Ran 25 tests in 15.325s
+
+FAILED (failures=1)
+Destroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...
+

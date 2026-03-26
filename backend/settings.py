@@ -39,7 +39,7 @@ DEBUG = os.getenv('DJANGO_DEBUG', 'True') == 'True'
 ALLOWED_HOSTS = _csv_env("DJANGO_ALLOWED_HOSTS", "ALLOWED_HOSTS")
 if not ALLOWED_HOSTS:
     # Default to known local/dev and Railway hostnames when env vars are missing.
-    ALLOWED_HOSTS = ["prominder.up.railway.app", "127.0.0.1", "localhost"]
+    ALLOWED_HOSTS = ["prominder.up.railway.app", "127.0.0.1", "localhost", "testserver"]
     railway_public_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
     if railway_public_domain and railway_public_domain not in ALLOWED_HOSTS:
         ALLOWED_HOSTS.append(railway_public_domain)

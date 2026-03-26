@@ -408,19 +408,61 @@ Expected
 - Status: 200 OK
 - Response has tool "onboarding" and saved profile data
 
-STEP 17: CHATBOT TOOL = GENERATE_TIMETABLE
+STEP 17: CHATBOT TOOL = GENERATE_TIMETABLE (Tool Selector)
 Request
 - Method: POST
 - URL: {{base_url}}/api/chatbot/converse/
 - Headers: Protected JSON headers
 Body
 {
-  "tool": "generate_timetable",
-  "generate_timetable": true
+  "tool": "generate_timetable"
 }
 Expected
 - Status: 200 OK
 - Response has keys: response, tool, entries, timetable, generation, conversation_id
+
+STEP 17.1: CHATBOT = NATURAL LANGUAGE GENERATE
+Request
+- Method: POST
+- URL: {{base_url}}/api/chatbot/converse/
+- Headers: Protected JSON headers
+Body
+{
+  "message": "generate the timetable please"
+}
+Expected
+- Same as Step 17 if prerequisites exist.
+- If prerequisites (Topics/Slots) ARE MISSING, bot will reply with a prompt.
+
+STEP 17.2: CONVERSATIONAL PREREQUISITE FILLING
+Request
+- Method: POST
+- URL: {{base_url}}/api/chatbot/converse/
+- Headers: Protected JSON headers
+Body
+{
+  "conversation_id": {{conversation_id}},
+  "message": "I want to study Math and OS tonight from 6pm to 9pm"
+}
+Expected
+- Status: 200 OK
+- Tool: "conversational_extractor"
+- Response will confirm extracted data and ask: "Shall I generate your timetable now?"
+
+STEP 17.3: CONVERSATIONAL "YES" FOLLOW-UP
+Request
+- Method: POST
+- URL: {{base_url}}/api/chatbot/converse/
+- Headers: Protected JSON headers
+Body
+{
+  "conversation_id": {{conversation_id}},
+  "message": "Yes, please do it"
+}
+Expected
+- Status: 200 OK
+- Tool: "generate_timetable"
+- Bott will generate and return the full timetable JSON.
 
 STEP 18: CHATBOT TOOL = ADAPTIVE_RESCHEDULE
 Request
@@ -528,9 +570,48 @@ Body
 Expected
 - Status: 204 No Content (or 400 if token already invalid)
 
+STEP 23: GATED CONVERSATIONAL FLOW (PRE-REQUISITE GATING)
+This is the new "Guided" flow where the bot asks for missing info.
+
+1. START WITH TOPICS
+Request
+- Method: POST
+- URL: {{base_url}}/api/chatbot/converse/
+- Body: { "message": "I want to study Math" }
+Expected: 200 OK. Tool: "prereq_collect". Response: "Sure! What are your free hours?"
+
+2. ADD SLOTS
+Request
+- Body: { "message": "6pm to 8pm daily" }
+Expected: 200 OK. Tool: "prereq_collect". Response: "Got it. When is your exam date?"
+
+3. ADD EXAM DATE (COMPULSORY)
+Request
+- Body: { "message": "April 5th" }
+Expected: 200 OK. Tool: "prereq_collect". Response: "Any days to skip?"
+
+4. SKIP DAYS + GENERATE
+Request
+- Body: { "message": "none" }
+Expected: 200 OK. Tool: "generate_timetable". Response: "Timetable generated successfully."
+
+STEP 24: VERIFY AI CURRICULUM EXTRACTION
+Check if the bot identifies chapters automatically.
+
+Request
+- Method: POST
+- URL: {{base_url}}/api/chatbot/converse/
+- Body: { "message": "I want to study Operating Systems" }
+Expected:
+- Check the Topic model (GET /api/timetable/entries/). 
+- Subject name should be "operating system".
+- "curriculum" field in Topic should contain ["Process Management", "Memory Management", ...]
+- Final Timetable entries should say "Operating Systems: Process Management".
+
 ============================================================
 COMMON ERROR RESPONSES FOR QUICK DEBUG
 ============================================================
+... (rest of the file)
 
 1) Missing/invalid JWT
 - Status: 401

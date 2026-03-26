@@ -146,8 +146,10 @@ class OCRAPITests(APITestCase):
             self.skipTest(f"Fixture PDF not found: {FIXTURE_PDF}")
         return open(FIXTURE_PDF, "rb")
 
-    def test_api_accepts_pdf_and_returns_parsed_data(self):
-        """POST fixture PDF → 200 with tool=ocr_exam_parser and parsed subjects."""
+    @patch('chatbot.views.extract_text_from_image')
+    def test_api_accepts_pdf_and_returns_parsed_data(self, mock_extract):
+        """POST fixture PDF → 200 with tool=ocr_exam_parser (or prereq_collect if no free slots)."""
+        mock_extract.return_value = {"subjects": EXPECTED_SUBJECTS}
         with self._fixture_file() as pdf:
             response = self.client.post(
                 self.url,
@@ -156,28 +158,35 @@ class OCRAPITests(APITestCase):
             )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data.get("tool"), "ocr_exam_parser")
+        # Tool can be ocr_exam_parser or prereq_collect (if no free slots yet)
+        self.assertIn(response.data.get("tool"), ["ocr_exam_parser", "prereq_collect"])
         self.assertIn("parsed", response.data)
         self.assertIn("subjects_count", response.data)
 
-    def test_api_creates_exam_subject_rows(self):
+    @patch('chatbot.views.extract_text_from_image')
+    def test_api_creates_exam_subject_rows(self, mock_extract):
         """PDF upload must result in ExamSubject rows in the DB."""
+        mock_extract.return_value = {"subjects": EXPECTED_SUBJECTS}
         with self._fixture_file() as pdf:
             self.client.post(self.url, {"exam_image": pdf}, format="multipart")
 
         count = ExamSubject.objects.filter(user=self.user).count()
         self.assertGreater(count, 0, "Expected ExamSubject rows after PDF upload")
 
-    def test_api_creates_topic_rows(self):
+    @patch('chatbot.views.extract_text_from_image')
+    def test_api_creates_topic_rows(self, mock_extract):
         """PDF upload must also create Topic rows for timetable scheduling."""
+        mock_extract.return_value = {"subjects": EXPECTED_SUBJECTS}
         with self._fixture_file() as pdf:
             self.client.post(self.url, {"exam_image": pdf}, format="multipart")
 
         count = Topic.objects.filter(user=self.user).count()
         self.assertGreater(count, 0, "Expected Topic rows after PDF upload")
 
-    def test_api_subjects_count_matches_db(self):
+    @patch('chatbot.views.extract_text_from_image')
+    def test_api_subjects_count_matches_db(self, mock_extract):
         """subjects_count in API response must equal DB rows created."""
+        mock_extract.return_value = {"subjects": EXPECTED_SUBJECTS}
         with self._fixture_file() as pdf:
             response = self.client.post(
                 self.url, {"exam_image": pdf}, format="multipart"

@@ -8,6 +8,9 @@ class Topic(models.Model):
     estimated_minutes = models.PositiveIntegerField(default=60)
     priority = models.IntegerField(default=1)  # higher = more important
     completed_minutes = models.PositiveIntegerField(default=0)
+    curriculum = models.JSONField(default=list, blank=True, null=True)
+    target_date = models.DateField(null=True, blank=True, help_text="Deadline for completing this topic")
+    is_overdue = models.BooleanField(default=False, help_text="Whether this topic's target date has passed")
 
     class Meta:
         indexes = [

@@ -1,14 +1,18 @@
+import datetime
 from rest_framework import serializers
 from .models import CompletionCheck, FreeSlot, TimetableEntry, Topic, UserNotification
+
+IST_OFFSET = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 
 class TopicSerializer(serializers.ModelSerializer):
     class Meta:
         model = Topic
-        fields = ['id', 'name', 'estimated_minutes', 'priority', 'completed_minutes']
+        fields = ['id', 'name', 'estimated_minutes', 'priority', 'completed_minutes', 'target_date', 'is_overdue']
 
     def validate_name(self, value):
         user = self.context['request'].user
-        if Topic.objects.filter(user=user, name=value).exists():
+        instance = getattr(self, 'instance', None)
+        if Topic.objects.filter(user=user, name=value).exclude(pk=instance.pk if instance else None).exists():
             raise serializers.ValidationError("Topic with this name already exists.")
         return value
 
@@ -16,6 +20,12 @@ class FreeSlotSerializer(serializers.ModelSerializer):
     class Meta:
         model = FreeSlot
         fields = ['id', 'start', 'end']
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['start'] = instance.start.astimezone(IST_OFFSET)
+        data['end'] = instance.end.astimezone(IST_OFFSET)
+        return data
 
     def validate(self, data):
         user = self.context['request'].user
@@ -33,9 +43,16 @@ class FreeSlotSerializer(serializers.ModelSerializer):
 
 class TimetableEntrySerializer(serializers.ModelSerializer):
     topic = TopicSerializer(read_only=True)
+    
     class Meta:
         model = TimetableEntry
         fields = ['id', 'topic', 'start', 'end', 'notified', 'done']
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['start'] = instance.start.astimezone(IST_OFFSET)
+        data['end'] = instance.end.astimezone(IST_OFFSET)
+        return data
 
 
 class UserNotificationSerializer(serializers.ModelSerializer):
