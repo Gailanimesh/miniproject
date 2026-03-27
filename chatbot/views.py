@@ -240,11 +240,11 @@ def _parse_subject_date_format(user_message, user):
     all_dates = []
     seen_normalized = {}  # Track normalized names to avoid duplicates
     
-    # Pattern 1: "Subject - YYYY-MM-DD" or "Subject: YYYY-MM-DD"
-    pattern1 = re.compile(r'([a-zA-Z][a-zA-Z0-9\s]*?)\s*[-:]\s*(\d{4}-\d{2}-\d{2})', re.IGNORECASE)
+    # Pattern 1: "Subject - YYYY-MM-DD" or "Subject: YYYY-MM-DD" (handles missing hyphens like YYYYMMDD or YYYYMM-DD)
+    pattern1 = re.compile(r'([a-zA-Z][a-zA-Z0-9\s]*?)\s*[-:]\s*(\d{4}-?\d{2}-?\d{2})', re.IGNORECASE)
     
-    # Pattern 2: "os 2026-03-30" (space between subject and date)
-    pattern2 = re.compile(r'([a-zA-Z][a-zA-Z0-9]*)\s+(\d{4}-\d{2}-\d{2})', re.IGNORECASE)
+    # Pattern 2: "os 2026-03-30" (space between subject and date, handles missing hyphens)
+    pattern2 = re.compile(r'([a-zA-Z][a-zA-Z0-9]*)\s+(\d{4}-?d{2}-?\d{2})', re.IGNORECASE)
     
     # Pattern 3: "Subject by April 10" or "Subject on April 15" (natural language)
     pattern3 = re.compile(r'([a-zA-Z][a-zA-Z0-9\s]+?)\s+(?:by|on|before|due)\s+([A-Za-z]+\s+\d{1,2}(?:,?\s*\d{4})?)', re.IGNORECASE)
@@ -255,13 +255,21 @@ def _parse_subject_date_format(user_message, user):
         date_str = date_str.strip()
         
         try:
-            parsed_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-        except ValueError:
-            try:
-                from dateutil import parser as date_parser
-                parsed_date = date_parser.parse(date_str, fuzzy=True).date()
-            except:
-                return None
+            # Handle YYYYMMDD by inserting hyphens if needed
+            if len(date_str) == 8 and date_str.isdigit():
+                date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
+            elif len(date_str) == 9 and '-' in date_str[4:]:
+                # Handles YYYYMM-DD or YYYY-MMDD
+                if date_str[4] != '-':
+                    date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[7:]}" # Fix YYYYMM-DD
+                else:
+                    date_str = f"{date_str[:7]}-{date_str[7:]}" # Fix YYYY-MMDD
+            
+            # Use date_parser for more flexibility
+            from dateutil import parser as date_parser
+            parsed_date = date_parser.parse(date_str, fuzzy=True).date()
+        except Exception:
+            return None
         
         # Normalize the subject name
         normalized_name = _normalize_subject_name(subject_name)
@@ -297,19 +305,35 @@ def _parse_subject_date_format(user_message, user):
             # If the original name has a subject code, use it
             if re.search(r'([A-Z]+)\s*(\d+)', subject_name):
                 display_name = subject_name.strip()
-            topic = Topic.objects.create(
+            
+            # Normalize for unique_key
+            clean_name = re.sub(r"[^a-z0-9]", "", display_name.lower())
+            uk = f"{user.id}:{clean_name}"
+            
+            # Use get_or_create to avoid IntegrityError on unique_key
+            topic, created = Topic.objects.get_or_create(
                 user=user,
-                name=display_name,
-                estimated_minutes=120,
-                priority=1,
-                target_date=parsed_date
+                unique_key=uk,
+                defaults={
+                    "name": display_name,
+                    "estimated_minutes": 120,
+                    "priority": 1,
+                    "target_date": parsed_date,
+                }
             )
+            if not created:
+                # Update existing topic's date and name if we have better info
+                topic.target_date = parsed_date
+                if len(display_name) > len(topic.name):
+                    topic.name = display_name
+                topic.save(update_fields=['target_date', 'name'])
+            
             return {
-                'name': display_name,
+                'name': topic.name,
                 'normalized': normalized_name,
                 'old_date': None,
                 'new_date': parsed_date.isoformat(),
-                'is_new': True,
+                'is_new': created,
                 'topic': topic
             }
     
@@ -640,7 +664,7 @@ IST_OFFSET = timezone.timedelta(hours=5, minutes=30)
 
 def _serialize_timetable_entry(entry):
     duration_minutes = int((entry.end - entry.start).total_seconds() // 60)
-    topic_name = getattr(entry, "temp_display_name", entry.topic.name)
+    topic_name = getattr(entry, "session_label", None) or getattr(entry, "temp_display_name", entry.topic.name)
     ist_offset = timezone.timedelta(hours=5, minutes=30)
     ist_tz = timezone.get_fixed_timezone(ist_offset)
     return {
@@ -1786,9 +1810,9 @@ class ChatbotConversationView(APIView):
                         error_msg = (
                             f"⚠️ I found {len(past)} exam date(s) that are in the past:\n"
                             f"{past_list}\n\n"
-                            "Please provide corrected dates for these subjects:\n"
-                            "Format: 'Subject Name - YYYY-MM-DD'\n"
-                            "Example: 'Math - 2026-04-15'\n\n"
+                            "Please provide corrected dates:\n"
+                            "Format: **Subject - YYYY-MM-DD**\n"
+                            "Example: **OS - 2026-04-02**\n\n"
                             "Enter the updated dates:"
                         )
                         return _persist_messages(request,
@@ -1804,21 +1828,36 @@ class ChatbotConversationView(APIView):
                         profile.exam_date = latest_date
                         profile.save(update_fields=['exam_date'])
                     
+                    # Transition to skip_days if we have everything else
+                    has_topics = Topic.objects.filter(user=request.user).exists()
+                    has_slots = FreeSlot.objects.filter(user=request.user).exists()
+                    
                     topic_list = []
                     for t in subject_dates['updated_topics']:
                         status_icon = "NEW" if t['is_new'] else "UPDATED"
                         topic_list.append(f"  - {t['name']}: {t['new_date']} ({status_icon})")
                     
-                    skip_msg = (
+                    response_text = (
                         f"Got it! I've saved the dates for {len(subject_dates['updated_topics'])} subject(s):\n" + 
                         "\n".join(topic_list) +
-                        f"\n\nLast exam: {latest_date}\n\n"
-                        "Are there any days you'd like to skip? "
-                        "(e.g., 'I'm not free on Sundays', or just say 'none' to continue)"
+                        f"\n\nLast exam: {latest_date or profile.exam_date}\n\n"
                     )
-                    conversation.setup_step = "skip_days"
+
+                    if has_topics and has_slots:
+                        if conversation.setup_step != "skip_days":
+                            response_text += "Are there any days you'd like to skip? (e.g., 'not on Sundays', or say 'none' to generate)"
+                            conversation.setup_step = "skip_days"
+                            conversation.save(update_fields=["setup_step"])
+                        else:
+                            # Already asked, maybe just a reminder or next step
+                            response_text += "Still waiting to hear if you have any days to skip! Or just say 'none'."
+                    else:
+                        response_text += "What time are you free to study? (e.g., '8pm to 10pm')"
+                        conversation.setup_step = "free_slots"
+                        conversation.save(update_fields=["setup_step"])
+
                     return _persist_messages(request,
-                        Response({"response": skip_msg, "tool": "prereq_collect"}, status=200),
+                        Response({"response": response_text, "tool": "prereq_collect"}, status=200),
                         user_message, conversation)
                 
                 # Fall back to LLM extraction
@@ -1836,7 +1875,7 @@ class ChatbotConversationView(APIView):
                         user_message, conversation)
                 else:
                     return _persist_messages(request,
-                        Response({"response": "I couldn't quite catch the date. Please tell me your exam or target date.\nExamples:\n  - 'April 15'\n  - 'OS - 2026-04-10'\n  - 'Math by April 5, Physics - 2026-04-15'", "tool": "prereq_collect"}, status=200),
+                        Response({"response": "I couldn't quite catch the date. Please tell me your exam or target date using this exact format:\n\n**Subject - YYYY-MM-DD**\n\nExamples:\n- **OS - 2026-04-10**\n- **DS - 2026-04-15**", "tool": "prereq_collect"}, status=200),
                         user_message, conversation)
 
             # Step C: If bot asked for free time slots, extract them
@@ -1862,10 +1901,9 @@ class ChatbotConversationView(APIView):
                         # Ask for exam date (normal onboarding flow)
                         exam_q = (
                             f"I've saved your study window ({', '.join(added_s)}) ✅\n\n"
-                            "What is your exam or target date?\n"
-                            "You can set:\n"
-                            "  - Single date: 'April 15'\n"
-                            "  - Per-subject: 'Math - April 10, Physics - April 15'"
+                            "Now, what are your exam or target dates? 🗓️\n\n"
+                            "Please format them as: **Subject - YYYY-MM-DD**\n"
+                            "Example: **OS - 2026-04-02, DS - 2026-04-05**"
                         )
                         return _persist_messages(request,
                             Response({"response": exam_q, "tool": "prereq_collect"}, status=200),
@@ -1911,8 +1949,8 @@ class ChatbotConversationView(APIView):
                             f"⚠️ I found {len(past)} exam date(s) that are in the past:\n"
                             f"{past_list}\n\n"
                             "Please provide corrected dates:\n"
-                            "Format: 'Subject Name - YYYY-MM-DD'\n"
-                            "Example: 'Math - 2026-04-15'\n\n"
+                            "Format: **Subject - YYYY-MM-DD**\n"
+                            "Example: **OS - 2026-04-02**\n\n"
                             "Enter the updated dates:"
                         )
                         return _persist_messages(request,
@@ -1944,17 +1982,26 @@ class ChatbotConversationView(APIView):
                     has_slots = FreeSlot.objects.filter(user=request.user).exists()
                     
                     if has_topics and has_slots and latest_date:
-                        response_text += "Are there any days you'd like to skip? (e.g., 'I'm not free on Sundays', or say 'none' to generate now)"
+                        if conversation.setup_step != "skip_days":
+                            response_text += "Are there any days you'd like to skip? (e.g., 'not on Sundays', or say 'none' to generate)"
+                            conversation.setup_step = "skip_days"
+                            conversation.save(update_fields=["setup_step"])
+                        else:
+                            response_text += "Still waiting to hear about any skip days! Or say 'none'."
                         return _persist_messages(request,
                             Response({"response": response_text, "tool": "prereq_collect"}, status=200),
                             user_message, conversation)
                     elif has_topics and not has_slots:
                         response_text += "Now, what time are you free to study each day? (e.g., '8pm to 10pm')"
+                        conversation.setup_step = "free_slots"
+                        conversation.save(update_fields=["setup_step"])
                         return _persist_messages(request,
                             Response({"response": response_text, "tool": "prereq_collect"}, status=200),
                             user_message, conversation)
                     else:
                         response_text += "What time are you free to study each day? (e.g., '8pm to 10pm')"
+                        conversation.setup_step = "free_slots"
+                        conversation.save(update_fields=["setup_step"])
                         return _persist_messages(request,
                             Response({"response": response_text, "tool": "prereq_collect"}, status=200),
                             user_message, conversation)
@@ -1977,7 +2024,7 @@ class ChatbotConversationView(APIView):
                 # Missing exam date → ask for it next
                 if has_topics and has_slots and not has_exam_date:
                     return _persist_messages(request,
-                        Response({"response": f"I've saved your info ✅\n\nWhat is your exam or target date? (e.g., 'OS - 2026-04-05' or 'Physics by April 10')", "tool": "prereq_collect"}, status=200),
+                        Response({"response": f"I've saved your info ✅\n\nWhat are your exam or target dates? 🗓️\n\nPlease format them as: **Subject - YYYY-MM-DD** (e.g., **OS - 2026-04-02** or **DS - 2026-04-05**)", "tool": "prereq_collect"}, status=200),
                         user_message, conversation)
 
                 # Missing slots → ask for free time
