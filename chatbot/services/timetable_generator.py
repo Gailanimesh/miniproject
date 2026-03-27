@@ -334,7 +334,8 @@ def _exam_aware_schedule(
                 
                 # If ALL subjects scheduled today, we have no choice (use shortest session)
                 if not available_now:
-                    break  # Can't schedule more today - all topics done
+                     # Allow repeats if we have VERY few subjects or it's urgent
+                     available_now = scored_subjects
                 
                 scored_subjects = available_now
                 
@@ -394,7 +395,8 @@ def _exam_aware_schedule(
                         user=user_profile.user,
                         topic=info["topic"],
                         start=slot_start,
-                        end=chunk_end
+                        end=chunk_end,
+                        session_label=display_name
                     )
                 )
                 entries[-1].temp_display_name = display_name
@@ -782,7 +784,8 @@ def generate_timetable(
                     user=user_profile.user,
                     topic=active_topic["topic"],
                     start=slot_start,
-                    end=chunk_end
+                    end=chunk_end,
+                    session_label=display_name
                 )
             )
             entries[-1].temp_display_name = display_name
@@ -812,7 +815,7 @@ def generate_timetable(
 
 def generate_timetable_for_user(
     user,
-    max_chunk_minutes=60,
+    max_chunk_minutes=120,
     include_metadata=False,
     ml_ranker=None,
     use_model_priority=False,

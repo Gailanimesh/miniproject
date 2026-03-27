@@ -11,6 +11,7 @@ class Topic(models.Model):
     curriculum = models.JSONField(default=list, blank=True, null=True)
     target_date = models.DateField(null=True, blank=True, help_text="Deadline for completing this topic")
     is_overdue = models.BooleanField(default=False, help_text="Whether this topic's target date has passed")
+    unique_key = models.CharField(max_length=255, unique=True, db_index=True, null=True, blank=True)
 
     class Meta:
         indexes = [
@@ -19,6 +20,14 @@ class Topic(models.Model):
 
     def __str__(self):
         return self.name
+
+    def save(self, *args, **kwargs):
+        if not self.unique_key:
+            import re
+            # Normalize name for unique_key: lowercase, remove non-alphanumeric
+            clean_name = re.sub(r"[^a-z0-9]", "", self.name.lower())
+            self.unique_key = f"{self.user_id}:{clean_name}"
+        super().save(*args, **kwargs)
 
 class FreeSlot(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='free_slots')
@@ -42,6 +51,7 @@ class TimetableEntry(models.Model):
     end = models.DateTimeField()
     notified = models.BooleanField(default=False)
     done = models.BooleanField(default=False)
+    session_label = models.CharField(max_length=255, null=True, blank=True)
 
     class Meta:
         ordering = ['start']

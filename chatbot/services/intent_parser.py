@@ -59,7 +59,8 @@ Rules for slots:
 - IMPORTANT: Return the LOCAL time the user mentioned. Do NOT convert to UTC yourself.
 - If they don't specify AM/PM, use logical context (e.g. 2 to 4 usually means 14:00 to 16:00).
 Rules for topics:
-- Just extract the subject names exactly as mentioned.
+- Extract abbreviation subjects (like "OS", "DS", "OOPS", "COA") as well as full names.
+- If the user lists subjects or says "subjects are...", "focused on...", catch all of them.
 - If the user mentions a deadline for a topic (e.g. "Math by April 5", "Physics - deadline April 10"), extract it as target_date.
 - Format target_date as "YYYY-MM-DD".
 Rules for dates:

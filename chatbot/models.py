@@ -57,6 +57,7 @@ class Conversation(models.Model):
     started_at = models.DateTimeField(auto_now_add=True)
     pending_ocr_data = models.JSONField(null=True, blank=True)
     parsed_subjects_for_setup = models.JSONField(null=True, blank=True)
+    setup_step = models.CharField(max_length=50, blank=True, default='')  # Tracks onboarding flow: subjects, free_slots, exam_dates, skip_days
 
     def __str__(self):
         if self.title:
